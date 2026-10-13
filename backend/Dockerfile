@@ -24,4 +24,5 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # db push applies the schema without destructive changes (it aborts rather than dropping data).
-CMD ["sh", "-c", "pnpm exec prisma db push --skip-generate && node dist/main.js"]
+# Call the Prisma binary directly: pnpm would try to write a lockfile into /app, which USER node can't do.
+CMD ["sh", "-c", "node_modules/.bin/prisma db push --skip-generate && node dist/main.js"]

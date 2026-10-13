@@ -1,5 +1,6 @@
 "use client";
 import type { ProviderInfo } from "./sources";
+import type { ApiTitle } from "./title-map";
 
 // Browser-side API client. Tokens live in localStorage (the API is bearer-token based).
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -39,6 +40,33 @@ function saveSession(s: Session | null) {
   window.dispatchEvent(new Event("cineora-auth"));
 }
 
+// ---- Profiles ----
+const PROFILE_KEY = "cineora.profile";
+export interface Profile {
+  id: string;
+  name: string;
+  avatar: string;
+  isKids: boolean;
+}
+export function loadProfile(): (Profile & { userId: string }) | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_KEY);
+    const p = raw ? (JSON.parse(raw) as Profile & { userId: string }) : null;
+    // A stored profile only counts for the account it was picked under.
+    return p && p.userId === loadSession()?.user.id ? p : null;
+  } catch {
+    return null;
+  }
+}
+export function saveProfile(p: Profile | null) {
+  try {
+    const uid = loadSession()?.user.id;
+    if (p && uid) localStorage.setItem(PROFILE_KEY, JSON.stringify({ ...p, userId: uid }));
+    else localStorage.removeItem(PROFILE_KEY);
+  } catch {}
+  window.dispatchEvent(new Event("cineora-profile"));
+}
+
 async function raw(path: string, init: RequestInit & { token?: string } = {}) {
   const { token, ...rest } = init;
   return fetch(`${API}${path}`, {
@@ -46,6 +74,7 @@ async function raw(path: string, init: RequestInit & { token?: string } = {}) {
     headers: {
       ...(rest.body ? { "Content-Type": "application/json" } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token && loadProfile() ? { "X-Profile-Id": loadProfile()!.id } : {}),
     },
   });
 }
@@ -91,12 +120,14 @@ export async function authed<T>(path: string, init: RequestInit = {}): Promise<T
 export async function signIn(mode: "login" | "register", body: { email: string; password: string; name?: string }) {
   const s = await parse<Session>(await raw(`/auth/${mode}`, { method: "POST", body: JSON.stringify(body) }));
   saveSession(s);
+  saveProfile(null);
   return s.user;
 }
 
 export async function signOut() {
   const s = loadSession();
   saveSession(null);
+  saveProfile(null);
   if (s) await raw("/auth/logout", { method: "POST", body: JSON.stringify({ refreshToken: s.refreshToken }) }).catch(() => {});
 }
 
@@ -124,8 +155,41 @@ export interface HistoryEntry {
   title: ApiTitleLite;
 }
 export const getHistory = () => authed<HistoryEntry[]>("/me/history");
-export const saveProgress = (titleId: string, positionSec: number, durationSec: number) =>
-  authed<void>("/me/history", { method: "PUT", body: JSON.stringify({ titleId, positionSec, durationSec }) });
+/** History key for a series episode; movies use the empty string. */
+export const episodeKey = (season?: number, episode?: number) => (season && episode ? `S${season}E${episode}` : "");
+export const saveProgress = (titleId: string, positionSec: number, durationSec: number, episodeId = "") =>
+  authed<void>("/me/history", { method: "PUT", body: JSON.stringify({ titleId, episodeId, positionSec, durationSec }) });
+
+export interface EpisodeProgress {
+  episodeId: string;
+  positionSec: number;
+  durationSec: number;
+}
+export const getTitleHistory = (titleId: string) => authed<EpisodeProgress[]>(`/me/history/${encodeURIComponent(titleId)}`);
+export const markSeasonWatched = (titleId: string, season: number, watched: boolean) =>
+  authed<void>(`/me/history/${encodeURIComponent(titleId)}/season/${season}`, { method: "PUT", body: JSON.stringify({ watched }) });
+
+export const getProfiles = () => authed<Profile[]>("/me/profiles");
+export const createProfile = (p: { name: string; avatar: string; isKids: boolean }) =>
+  authed<Profile>("/me/profiles", { method: "POST", body: JSON.stringify(p) });
+export const updateProfile = (id: string, p: Partial<Pick<Profile, "name" | "avatar" | "isKids">>) =>
+  authed<Profile>(`/me/profiles/${id}`, { method: "PATCH", body: JSON.stringify(p) });
+export const deleteProfile = (id: string) => authed<void>(`/me/profiles/${id}`, { method: "DELETE" });
+export const getKidsHome = () =>
+  fetch(`${API}/home?kids=1`).then((r) => r.json() as Promise<{ rows: { key: string; title: string; items: ApiTitle[] }[] }>);
+
+/** 1 = liked, -1 = disliked, 0 = unrated. */
+export const getRating = (titleId: string) => authed<{ value: number }>(`/me/ratings/${encodeURIComponent(titleId)}`).then((r) => r.value);
+export const setRating = (titleId: string, value: 1 | -1 | 0) =>
+  value === 0
+    ? authed<void>(`/me/ratings/${encodeURIComponent(titleId)}`, { method: "DELETE" })
+    : authed<void>(`/me/ratings/${encodeURIComponent(titleId)}`, { method: "PUT", body: JSON.stringify({ value }) });
+
+/** Anonymous view beacon for trending; failures are irrelevant to the page. */
+export const trackView = (titleId: string) =>
+  fetch(`${API}/titles/${encodeURIComponent(titleId)}/view`, { method: "POST", keepalive: true }).catch(() => {});
+
+export const getMyHome = () => authed<{ rows: { key: string; title: string; items: ApiTitle[] }[] }>("/me/home");
 
 export interface ApiTitleLite {
   id: string;
@@ -143,6 +207,7 @@ export interface AdminProviderRow {
   urlTemplate: string;
   episodeUrlTemplate: string | null;
   licenseRef: string;
+  languages: string[];
   enabled: boolean;
 }
 export interface AdminTitle {
@@ -158,7 +223,7 @@ const json = (method: string, body?: unknown): RequestInit => ({ method, body: b
 export const adminProviders = () => authed<AdminProviderRow[]>("/admin/embed-providers");
 export const adminSaveProvider = (
   exists: boolean,
-  p: { slug: string; label: string; priority: number; urlTemplate: string; episodeUrlTemplate: string; licenseRef: string; enabled: boolean },
+  p: { slug: string; label: string; priority: number; urlTemplate: string; episodeUrlTemplate: string; licenseRef: string; languages: string[]; enabled: boolean },
 ) => {
   const { slug, ...rest } = p;
   return exists

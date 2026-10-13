@@ -9,6 +9,7 @@ import { TitlesModule } from "./titles/titles.module";
 import { MeModule } from "./me/me.module";
 import { PlaybackModule } from "./playback/playback.module";
 import { AdminModule } from "./admin/admin.module";
+import { PartyModule } from "./party/party.module";
 import { HealthController } from "./common/health.controller";
 import { GlobalModule } from "./common/global.module";
 
@@ -29,6 +30,7 @@ import { GlobalModule } from "./common/global.module";
     MeModule,
     PlaybackModule,
     AdminModule,
+    PartyModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

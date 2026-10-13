@@ -116,7 +116,7 @@ export function SearchBox() {
         <ul
           id={listId}
           role="listbox"
-          className="glass absolute right-0 top-full mt-3 w-72 overflow-hidden rounded-2xl p-1.5 sm:w-80"
+          className="glass-menu absolute right-0 top-full mt-3 w-72 overflow-hidden rounded-2xl p-1.5 sm:w-80"
         >
           {shown.map((h, i) => (
             <li key={h.slug} id={`${listId}-${i}`} role="option" aria-selected={i === active}>

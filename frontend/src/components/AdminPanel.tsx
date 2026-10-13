@@ -130,6 +130,7 @@ function ProviderRow({ info, row, onSaved }: { info: ProviderInfo; row?: AdminPr
     urlTemplate: row?.urlTemplate ?? "",
     episodeUrlTemplate: row?.episodeUrlTemplate ?? "",
     licenseRef: row?.licenseRef ?? "",
+    languages: (row?.languages ?? []).join(", "),
     enabled: row?.enabled ?? false,
   });
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -141,7 +142,7 @@ function ProviderRow({ info, row, onSaved }: { info: ProviderInfo; row?: AdminPr
     setBusy(true);
     setMsg(null);
     try {
-      await adminSaveProvider(!!row, { slug: info.slug, label: info.label, priority: info.order, ...f });
+      await adminSaveProvider(!!row, { slug: info.slug, label: info.label, priority: info.order, ...f, languages: f.languages.split(/[\s,]+/).filter(Boolean).map((l) => l.toLowerCase()) });
       await onSaved();
       setMsg({ ok: true, text: "Saved" });
     } catch (err) {
@@ -166,6 +167,9 @@ function ProviderRow({ info, row, onSaved }: { info: ProviderInfo; row?: AdminPr
         </label>
         <label className="block text-xs text-white/55">Licence reference (optional)
           <input value={f.licenseRef} onChange={(e) => set("licenseRef", e.target.value)} placeholder="Contract or terms reference" className={`${input} mt-1`} />
+        </label>
+        <label className="block text-xs text-white/55">Languages (comma-separated codes, e.g. en, hi, es)
+          <input value={f.languages} onChange={(e) => set("languages", e.target.value)} placeholder="en, hi" className={`${input} mt-1`} />
         </label>
         <div className="flex items-center justify-between gap-3">
           <label className="flex items-center gap-2 text-sm">

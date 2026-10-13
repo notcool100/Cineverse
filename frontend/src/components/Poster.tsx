@@ -8,6 +8,12 @@ export function posterStyle(t: Title) {
   };
 }
 
+/** Tiny tinted placeholder so artwork fades in over its own colour instead of popping in. */
+export function blurData(color: string) {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 2 3'><rect width='2' height='3' fill='${color}'/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 export function PosterImage({
   title,
   sizes,
@@ -19,6 +25,7 @@ export function PosterImage({
   priority?: boolean;
   className?: string;
 }) {
+  if (!title.poster) return null; // titles without artwork fall back to the gradient behind
   return (
     <Image
       src={title.poster}
@@ -26,6 +33,8 @@ export function PosterImage({
       fill
       sizes={sizes}
       priority={priority}
+      placeholder="blur"
+      blurDataURL={blurData(title.accent[0])}
       className={`object-cover ${className}`}
     />
   );
@@ -40,6 +49,7 @@ export function BackdropImage({
   priority?: boolean;
   className?: string;
 }) {
+  if (!title.backdrop) return null;
   return (
     <Image
       src={title.backdrop}
@@ -47,6 +57,8 @@ export function BackdropImage({
       fill
       sizes="100vw"
       priority={priority}
+      placeholder="blur"
+      blurDataURL={blurData(title.accent[1])}
       className={`object-cover ${className}`}
     />
   );

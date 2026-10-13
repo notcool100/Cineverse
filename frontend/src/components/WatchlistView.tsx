@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { getHistory, getWatchlist, type ApiTitleLite, type HistoryEntry } from "@/lib/client-api";
 import { imageUrl } from "@/lib/image-url";
 import type { Title } from "@/lib/types";
+import { EmptyState } from "./EmptyState";
+import { GridSkeleton } from "./Skeleton";
 import { TitleCard } from "./TitleCard";
 import { useUser } from "./useSession";
 
@@ -32,16 +33,18 @@ export function WatchlistView() {
 
   if (!user)
     return (
-      <p className="text-white/60">
-        <Link href="/login?next=/watchlist" className="text-accent underline">Sign in</Link> to see your list.
-      </p>
+      <EmptyState art="list" title="Sign in to see your list" actions={[{ label: "Sign in", href: "/login?next=/watchlist", primary: true }, { label: "Browse trending", href: "/new" }]}>
+        Your list follows you across devices once you&apos;re signed in.
+      </EmptyState>
     );
-  if (!list) return <p className="text-white/50">Loading…</p>;
+  if (!list) return <GridSkeleton />;
 
   return (
     <>
       {list.length === 0 ? (
-        <p className="text-white/60">Nothing here yet. Add titles with “My List” on any title page.</p>
+        <EmptyState art="list" title="Your list is empty" actions={[{ label: "Browse trending", href: "/new", primary: true }, { label: "Explore everything", href: "/browse" }]}>
+          Tap “My List” on any title and it will wait for you here.
+        </EmptyState>
       ) : (
         <div className="grid grid-cols-2 justify-items-center gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
           {list.map((t) => <TitleCard key={t.slug} title={asTitle(t)} />)}

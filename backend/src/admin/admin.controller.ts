@@ -49,12 +49,13 @@ class ProviderDto {
   @IsOptional() @IsString() @MaxLength(2000) episodeUrlTemplate?: string;
   @IsOptional() @IsString() licenseRef?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @Matches(/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/, { each: true }) languages?: string[];
   @IsOptional() @Type(() => Number) @IsInt() priority?: number;
 }
 
 interface TmdbMovie {
   title?: string; name?: string; overview?: string; poster_path?: string; backdrop_path?: string;
-  release_date?: string; first_air_date?: string; runtime?: number; genres?: { name: string }[];
+  release_date?: string; first_air_date?: string; runtime?: number; genres?: { name: string }[]; original_language?: string;
 }
 
 class HostDto {
@@ -223,6 +224,7 @@ export class AdminController {
       year: date ? new Date(date).getUTCFullYear() : undefined,
       runtimeMin: m.runtime,
       genres: m.genres?.map((g) => g.name) ?? [],
+      language: m.original_language ?? null,
     };
     const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${dto.tmdbId}`;
     const t = await this.prisma.title.upsert({

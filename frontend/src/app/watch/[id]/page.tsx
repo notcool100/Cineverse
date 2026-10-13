@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getTitle } from "@/lib/catalog";
 import { Player } from "@/components/Player";
+import { EpisodeBrowser } from "@/components/EpisodeBrowser";
 
 export const metadata: Metadata = { title: "Watch" };
 
@@ -34,8 +35,12 @@ async function WatchContent({
   const num = (v: unknown) => (typeof v === "string" && /^\d{1,4}$/.test(v) ? Number(v) : undefined);
   const season = series ? (num(s) ?? eps[0]?.season ?? 1) : undefined;
   const episode = series ? (num(e) ?? eps.find((x) => x.season === season)?.number ?? 1) : undefined;
-  const seasons = [...new Set(eps.map((x) => x.season))];
   const href = (se: number, ep: number) => `/watch/${title.id}?season=${se}&episode=${ep}${typeof source === "string" ? `&source=${encodeURIComponent(source)}` : ""}`;
+
+  const ordered = [...eps].sort((a, b) => a.season - b.season || a.number - b.number);
+  const at = ordered.findIndex((x) => x.season === season && x.number === episode);
+  const nx = at >= 0 ? ordered[at + 1] : undefined;
+  const nextHref = nx ? href(nx.season, nx.number) : undefined;
 
   return (
     <>
@@ -50,26 +55,16 @@ async function WatchContent({
         initialSourceId={typeof source === "string" ? source : undefined}
         season={season}
         episode={episode}
+        nextHref={nextHref}
         key={`${season}-${episode}`}
       />
       {series && eps.length > 0 && (
-        <div className="mt-4 space-y-3">
-          <p className="text-sm text-white/70">Season {season} · Episode {episode}</p>
-          <div className="flex flex-wrap gap-2">
-            {seasons.map((se) => (
-              <Link key={se} href={href(se, 1)} className={`rounded-full px-3 py-1 text-xs ${se === season ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/20"}`}>
-                S{se}
-              </Link>
-            ))}
-          </div>
-          <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto">
-            {eps.filter((x) => x.season === season).map((x) => (
-              <Link key={x.number} href={href(x.season, x.number)} className={`rounded-md px-2.5 py-1 text-xs ${x.number === episode ? "bg-white text-black" : "bg-white/10 text-white/70 hover:bg-white/20"}`}>
-                {x.number}
-              </Link>
-            ))}
-          </div>
-        </div>
+        <EpisodeBrowser
+          titleId={title.id}
+          episodes={eps}
+          current={{ season: season!, number: episode! }}
+          linkSuffix={typeof source === "string" ? `&source=${encodeURIComponent(source)}` : ""}
+        />
       )}
       <h1 className="mt-6 text-2xl font-bold">{title.name}</h1>
       <p className="mt-2 max-w-3xl text-white/65">{title.overview}</p>

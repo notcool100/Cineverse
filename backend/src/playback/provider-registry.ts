@@ -56,10 +56,13 @@ export interface ProviderRow {
   episodeUrlTemplate: string | null;
   licenseRef: string;
   enabled: boolean;
+  languages?: string[];
 }
 
 export interface ProviderInfo extends RegistryProvider {
   order: number;
+  /** Language codes this server offers; empty when the operator hasn't said. */
+  languages: string[];
   state: ProviderState;
   types: ContentType[];
   /** https origin of the validated template; lets clients measure latency to pick the fastest provider. */
@@ -76,7 +79,7 @@ export function describeProviders(rows: ProviderRow[], valid: (tpl: string) => b
     if (row?.episodeUrlTemplate && valid(row.episodeUrlTemplate)) types.push("tv");
     const state: ProviderState = !types.length ? "unconfigured" : row!.enabled ? "enabled" : "disabled";
     const tpl = row?.urlTemplate || row?.episodeUrlTemplate;
-    return { ...p, order, state, types, ...(state === "enabled" && tpl ? { origin: originOf(tpl) } : {}) };
+    return { ...p, order, languages: row?.languages ?? [], state, types, ...(state === "enabled" && tpl ? { origin: originOf(tpl) } : {}) };
   });
 }
 

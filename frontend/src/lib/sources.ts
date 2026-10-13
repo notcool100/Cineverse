@@ -10,6 +10,8 @@ export interface ProviderInfo {
   order: number;
   state: ProviderState;
   types: ("movie" | "tv")[];
+  /** ISO 639-1 codes of the languages this server offers (empty = unspecified). */
+  languages?: string[];
   /** Provider's https origin, probed from the browser to rank by latency. */
   origin?: string;
 }
@@ -22,6 +24,7 @@ export interface PickerEntry {
   /** Set for registry providers; the token comes from /playback/embed-token instead of a stored Source. */
   providerSlug?: string;
   state: ProviderState;
+  languages?: string[];
   /** Measured round-trip to the provider in ms, when probed successfully. */
   latencyMs?: number;
 }
@@ -47,6 +50,7 @@ export function buildEntries(
         label: p.label,
         priority: PROVIDER_PRIORITY_BASE + p.order,
         providerSlug: p.slug,
+        languages: p.languages,
         latencyMs: latency[p.slug],
         // A configured provider that lacks a template for this content type can't play it.
         state: p.state === "enabled" && !p.types.includes(need) ? "disabled" : p.state,
@@ -72,3 +76,11 @@ export function initialIndex(entries: PickerEntry[], initialId?: string, pref?: 
   if (ok(byPref)) return byPref;
   return Math.max(0, entries.findIndex(isPlayable));
 }
+
+/** Distinct language codes offered across entries, sorted. */
+export const languagesOf = (entries: PickerEntry[]): string[] =>
+  [...new Set(entries.flatMap((e) => (e.state === "enabled" ? e.languages ?? [] : [])))].sort();
+
+/** Entries offering `lang`; no language selected keeps everything. */
+export const filterByLanguage = (entries: PickerEntry[], lang: string | null): PickerEntry[] =>
+  lang ? entries.filter((e) => e.languages?.includes(lang)) : entries;

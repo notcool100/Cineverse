@@ -1,16 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Source, TitleType } from "@/lib/types";
 import { buildEntries, isPlayable, type ProviderInfo } from "@/lib/sources";
-import { addToWatchlist, getEmbedProviders, getWatchlist, removeFromWatchlist } from "@/lib/client-api";
+import { getEmbedProviders, getRating, setRating } from "@/lib/client-api";
 import { PlayGlyph } from "./Poster";
 import { SourceSwitcher } from "./SourceSwitcher";
 import { useUser } from "./useSession";
+import { useWatchlist } from "./useWatchlist";
 
-export function TitleActions({ titleId, sources, titleType }: { titleId: string; sources: Source[]; titleType?: TitleType }) {
+export function TitleActions({ titleId, titleName, sources, titleType }: { titleId: string; titleName: string; sources: Source[]; titleType?: TitleType }) {
   const router = useRouter();
   const user = useUser();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
@@ -24,35 +25,46 @@ export function TitleActions({ titleId, sources, titleType }: { titleId: string;
       live = false;
     };
   }, [user]);
-  const [saved, setSaved] = useState(false);
+  const { saved, toggle: toggleList } = useWatchlist(titleId, `/title/${titleId}`);
+  const playRef = useRef<HTMLAnchorElement>(null);
+  const [pastHero, setPastHero] = useState(false);
+  useEffect(() => {
+    const el = playRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(([e]) => setPastHero(!e.isIntersecting && e.boundingClientRect.top < 0));
+    io.observe(el);
+    return () => io.disconnect();
+  }, [sourceId]);
+  const playable = !!sourceId && isPlayable(ordered.find((e) => e.id === sourceId));
 
+  const [rating, setRatingState] = useState(0);
   useEffect(() => {
     if (!user) return;
     let live = true;
-    getWatchlist()
-      .then((rows) => live && setSaved(rows.some((r) => r.title.slug === titleId)))
-      .catch(() => {});
+    getRating(titleId).then((v) => live && setRatingState(v)).catch(() => {});
     return () => {
       live = false;
     };
   }, [user, titleId]);
 
-  async function toggleList() {
+  async function rate(value: 1 | -1) {
     if (!user) return router.push(`/login?next=/title/${titleId}`);
-    const was = saved;
-    setSaved(!was);
+    const was = rating;
+    const next = was === value ? 0 : value;
+    setRatingState(next);
     try {
-      await (was ? removeFromWatchlist(titleId) : addToWatchlist(titleId));
+      await setRating(titleId, next);
     } catch {
-      setSaved(was);
+      setRatingState(was);
     }
   }
 
   return (
     <>
       <div className="rise rise-3 mt-8 flex flex-wrap gap-3">
-        {sourceId && isPlayable(ordered.find((e) => e.id === sourceId)) ? (
+        {playable ? (
           <Link
+            ref={playRef}
             href={`/watch/${titleId}?source=${sourceId}`}
             className="inline-flex items-center gap-2.5 rounded-md bg-white px-8 py-3 text-base font-semibold text-black transition hover:bg-white/90"
           >
@@ -69,11 +81,39 @@ export function TitleActions({ titleId, sources, titleType }: { titleId: string;
         >
           <span aria-hidden className="text-xl leading-none">{saved ? "✓" : "+"}</span> My List
         </button>
+        {([1, -1] as const).map((v) => (
+          <button
+            key={v}
+            type="button"
+            onClick={() => rate(v)}
+            aria-pressed={rating === v}
+            aria-label={v === 1 ? "I like this" : "Not for me"}
+            title={v === 1 ? "I like this" : "Not for me"}
+            className={`grid size-12 place-items-center rounded-full text-xl backdrop-blur-md transition ${rating === v ? "bg-white text-black" : "bg-white/20 hover:bg-white/30"}`}
+          >
+            <span aria-hidden>{v === 1 ? "👍" : "👎"}</span>
+          </button>
+        ))}
       </div>
       <div className="rise rise-3 mt-8">
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-white/45">Watch from</p>
         <SourceSwitcher sources={ordered} selected={sourceId} onSelect={setSourceId} />
       </div>
+      {playable && (
+        <div
+          aria-hidden={!pastHero}
+          inert={!pastHero}
+          className={`on-dark glass fixed inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex items-center justify-between gap-3 rounded-2xl p-2 pl-4 transition duration-300 md:inset-x-auto md:bottom-5 md:left-1/2 md:w-[28rem] md:-translate-x-1/2 ${pastHero ? "translate-y-0 opacity-100" : "pointer-events-none translate-y-6 opacity-0"}`}
+        >
+          <span className="truncate text-sm font-semibold">{titleName}</span>
+          <Link
+            href={`/watch/${titleId}?source=${sourceId}`}
+            className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-black"
+          >
+            <PlayGlyph className="size-4" /> Play
+          </Link>
+        </div>
+      )}
     </>
   );
 }

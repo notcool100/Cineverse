@@ -6,16 +6,21 @@ import { config } from "dotenv";
 // New titles are published immediately (embed providers play anything with a tmdbId); existing rows keep
 // their `published` flag so an admin's unpublish sticks. TV titles get placeholder Episode rows
 // (season/number only) from TMDB's season episode counts.
-// Usage: pnpm db:import:tmdb [--limit=1000]   (limit = titles per type, default 1000)
+// Usage: pnpm db:import:tmdb [--limit=1000] [--indian]
+//   limit = titles per type (per language with --indian), default 1000.
+//   --indian: instead of the global popular/top_rated lists (Hollywood-heavy), discover by original language
+//   (Hindi, Tamil, Telugu, Malayalam, Kannada, Bengali, Marathi, Punjabi) sorted by vote count.
 config();
 const key = process.env.TMDB_API_KEY;
 if (!key) throw new Error("TMDB_API_KEY is required");
 const limit = Number(process.argv.find((a) => a.startsWith("--limit="))?.slice(8) ?? 1000);
+const indian = process.argv.includes("--indian");
+const LANGS = ["hi", "ta", "te", "ml", "kn", "bn", "mr", "pa"];
 const prisma = new PrismaClient();
 
 interface Item {
   id: number; title?: string; name?: string; overview?: string; poster_path?: string | null; backdrop_path?: string | null;
-  release_date?: string; first_air_date?: string; genre_ids?: number[]; adult?: boolean;
+  release_date?: string; first_air_date?: string; genre_ids?: number[]; adult?: boolean; original_language?: string; popularity?: number; vote_count?: number;
 }
 interface TvDetail { seasons?: { season_number: number; episode_count: number }[]; episode_run_time?: number[] }
 
@@ -51,12 +56,23 @@ async function genreMap(kind: "movie" | "tv") {
 
 async function collect(kind: "movie" | "tv") {
   const items = new Map<number, Item>();
-  for (const list of ["popular", "top_rated"]) {
-    for (let page = 1; page <= 500 && items.size < limit; page++) {
-      const { results } = await tmdb<{ results: Item[] }>(`/${kind}/${list}?page=${page}`);
-      if (!results.length) break;
-      for (const r of results) if (!r.adult && !items.has(r.id) && items.size < limit) items.set(r.id, r);
+  const sources = indian
+    ? LANGS.map((l) => `/discover/${kind}?with_original_language=${l}&sort_by=vote_count.desc&include_adult=false&page=`)
+    : ["popular", "top_rated"].map((l) => `/${kind}/${l}?page=`);
+  for (const src of sources) {
+    let got = 0;
+    const maxPage = Math.min(500, Math.ceil(limit / 20));
+    for (let start = 1; start <= maxPage; start += 10) {
+      const pages = Array.from({ length: Math.min(10, maxPage - start + 1) }, (_, i) => start + i);
+      const batches = await Promise.all(pages.map((pg) => tmdb<{ results: Item[] }>(`${src}${pg}`).catch(() => ({ results: [] as Item[] }))));
+      let empty = false;
+      for (const { results } of batches) {
+        if (!results.length) empty = true;
+        for (const r of results) if (!r.adult && got < limit) { got++; items.set(r.id, r); }
+      }
+      if (empty) break;
     }
+    console.log(`${kind}: collected ${got} from ${src.split("?")[1].split("&")[0]} (total ${items.size})`);
   }
   return [...items.values()];
 }
@@ -80,6 +96,9 @@ async function importKind(kind: "movie" | "tv") {
         releaseDate: date ? new Date(date) : undefined,
         year: date ? new Date(date).getUTCFullYear() : undefined,
         runtimeMin: tv?.episode_run_time?.[0],
+        language: m.original_language ?? null,
+        popularity: m.popularity ?? 0,
+        voteCount: m.vote_count ?? 0,
         genres: (m.genre_ids ?? []).flatMap((g) => genres.get(g) ?? []),
       };
       const slug = `${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "title"}-${m.id}`;

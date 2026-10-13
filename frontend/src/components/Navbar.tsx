@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "@/lib/client-api";
+import { ProfileMenu } from "./ProfileMenu";
 import { SearchBox } from "./SearchBox";
+import { SettingsMenu } from "./SettingsMenu";
+import { useProfile } from "./useProfile";
 import { useUser } from "./useSession";
 
 const baseLinks = [
@@ -18,6 +21,7 @@ export function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
   const user = useUser();
+  const profile = useProfile();
   const links = user ? [...baseLinks, { href: "/watchlist", label: "My List" }] : baseLinks;
 
   return (
@@ -28,12 +32,12 @@ export function Navbar() {
       >
         <Link
           href="/"
-          className="mr-3 hidden text-[15px] sm:block font-bold tracking-[0.28em] text-white"
+          className="mr-3 text-[15px] font-bold tracking-[0.28em] text-white"
           aria-label="Cineora home"
         >
           CINEORA<span className="text-accent">.</span>
         </Link>
-        <ul className="no-scrollbar flex items-center gap-0.5 overflow-x-auto">
+        <ul className="no-scrollbar hidden items-center gap-0.5 overflow-x-auto md:flex">
           {links.map((l) => {
             const active = l.href === "/" ? pathname === "/" : pathname.startsWith(l.href);
             return (
@@ -53,7 +57,9 @@ export function Navbar() {
             );
           })}
         </ul>
-        <SearchBox />
+        <div className="hidden md:block"><SearchBox /></div>
+        <SettingsMenu />
+        {user && profile && <ProfileMenu profile={profile} />}
         {user ? (
           <button
             type="button"
@@ -61,7 +67,7 @@ export function Navbar() {
               await signOut();
               router.push("/");
             }}
-            className="ml-1 rounded-full px-4 py-1.5 text-sm text-white/60 transition-colors hover:bg-white/8 hover:text-white"
+            className="ml-1 rounded-full px-3 py-1.5 text-sm text-white/60 transition-colors hover:bg-white/8 hover:text-white md:px-4"
           >
             Sign out
           </button>

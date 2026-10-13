@@ -2,17 +2,23 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type shaka from "shaka-player";
 import type { Source, TitleType } from "@/lib/types";
-import { getEmbedProviders, getEmbedToken, getHistory, getPlaybackToken, saveProgress, type PlaybackToken } from "@/lib/client-api";
+import { getEmbedProviders, getEmbedToken, episodeKey, getHistory, getPlaybackToken, saveProgress, type PlaybackToken } from "@/lib/client-api";
 import { probeProviders } from "@/lib/latency";
 import { buildEntries, initialIndex, nextPlayable, type PickerEntry, type ProviderInfo } from "@/lib/sources";
 import { useUser } from "./useSession";
 import { VideoControls } from "./VideoControls";
+import { EmptyState } from "./EmptyState";
 
 const PREF_KEY = "cineora.preferredSource";
 /** How long an iframe may take to fire `load` before we suggest another source. */
 const SLOW_MS = 12_000;
+/** No per-title intro markers exist, so "Skip intro" is a fixed window: shown early in an episode, jumps to INTRO_END. */
+const INTRO_SHOW_FROM = 3;
+const INTRO_END = 90;
+const NEXT_COUNTDOWN = 8;
 
 const readPref = (): string | null => {
   try {
@@ -36,6 +42,8 @@ interface Props {
   /** Episode to play for series; providers need both to build a TV URL. */
   season?: number;
   episode?: number;
+  /** Series only: the next episode's watch URL; enables autoplay-next. */
+  nextHref?: string;
 }
 
 /** Loads the provider registry, then hands the merged source list to the player. */
@@ -77,8 +85,12 @@ export function Player(props: Props) {
 }
 
 /** Plays the chosen source; on failure falls back to the next playable source in order. */
-function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, season, episode }: Props & { entries: PickerEntry[] }) {
+function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, season, episode, nextHref }: Props & { entries: PickerEntry[] }) {
   const user = useUser();
+  const router = useRouter();
+  const epKey = episodeKey(season, episode);
+  const [showSkip, setShowSkip] = useState(false);
+  const [countdown, setCountdown] = useState<number | null>(null);
   // URL choice wins, then the remembered source (matched by label, since ids are per-title).
   const [index, setIndex] = useState(() => initialIndex(ordered, initialSourceId, readPref()));
   const [token, setToken] = useState<PlaybackToken | null>(null);
@@ -120,6 +132,12 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, source?.id]);
 
+  // Iframes and external links can't report progress; record that playback started so it counts as a watch.
+  const startedType = token && token.type !== "hls" && token.type !== "direct" ? token.type : null;
+  useEffect(() => {
+    if (startedType) saveProgress(titleId, 0, 0, epKey).catch(() => {});
+  }, [startedType, titleId, epKey]);
+
   const isVideo = token?.type === "hls" || token?.type === "direct";
   const url = token && "url" in token ? token.url : undefined;
   useEffect(() => {
@@ -131,7 +149,13 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
 
     const save = () => {
       if (video.duration > 0 && video.currentTime > 0)
-        saveProgress(titleId, Math.floor(video.currentTime), Math.floor(video.duration)).catch(() => {});
+        saveProgress(titleId, Math.floor(video.currentTime), Math.floor(video.duration), epKey).catch(() => {});
+    };
+
+    const onTime = () => setShowSkip(!!season && video.currentTime >= INTRO_SHOW_FROM && video.currentTime < INTRO_END - 5);
+    const onEnded = () => {
+      save();
+      if (nextHref) setCountdown(NEXT_COUNTDOWN);
     };
 
     (async () => {
@@ -141,24 +165,38 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
       player = new shaka.Player();
       await player.attach(video);
       player.addEventListener("error", () => next());
-      const resume = (await getHistory().catch(() => [])).find((h) => h.title.slug === titleId);
+      const resume = (await getHistory().catch(() => [])).find((h) => h.title.slug === titleId && h.episodeId === epKey);
       const pos = resume && resume.positionSec < resume.durationSec - 10 ? resume.positionSec : undefined;
       await player.load(url, pos);
       if (cancelled) return;
       video.play().catch(() => {});
       timer = setInterval(save, 15_000);
       video.addEventListener("pause", save);
+      video.addEventListener("timeupdate", onTime);
+      video.addEventListener("ended", onEnded);
     })().catch(() => !cancelled && next());
 
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
       video.removeEventListener("pause", save);
+      video.removeEventListener("timeupdate", onTime);
+      video.removeEventListener("ended", onEnded);
       save();
       player?.destroy();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVideo, url, titleId]);
+
+  useEffect(() => {
+    if (countdown === null || !nextHref) return;
+    if (countdown <= 0) {
+      router.push(nextHref);
+      return;
+    }
+    const t = setTimeout(() => setCountdown((c) => (c === null ? c : c - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [countdown, nextHref, router]);
 
   if (!user)
     return (
@@ -176,14 +214,51 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
 
   return (
     <div>
-      {error || !token ? (
-        <Notice>{error ?? "Loading…"}</Notice>
+      {error ? (
+        <div className="grid aspect-video w-full place-items-center rounded-2xl border border-white/10 bg-black/40 p-4">
+          <EmptyState
+            art="source"
+            title="This source failed"
+            className="py-6"
+            actions={[
+              { label: "Try the first source again", primary: true, onClick: () => select(Math.max(0, ordered.findIndex((e) => e.state === "enabled"))) },
+              { label: "Back to title", href: `/title/${titleId}` },
+            ]}
+          >
+            None of the sources could play this right now. Pick a different one below, or try again in a moment.
+          </EmptyState>
+        </div>
+      ) : !token ? (
+        <div role="status" aria-label="Loading player" className="skeleton grid aspect-video w-full place-items-center rounded-2xl">
+          <span className="text-sm text-white/55">Loading {source.label}…</span>
+        </div>
       ) : (
-        <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
+        <div className="on-dark relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-black">
           {isVideo && (
             <>
               <video ref={videoRef} playsInline className="size-full" />
-              <VideoControls videoRef={videoRef} sources={ordered} activeSourceId={source.id} onSelectSource={(i) => select(i, true)} />
+              <VideoControls videoRef={videoRef} sources={ordered} activeSourceId={source.id} onSelectSource={(i) => select(i, true)} previewSrc={token.type === "direct" ? token.url : undefined} />
+              {showSkip && countdown === null && (
+                <button
+                  onClick={() => {
+                    if (videoRef.current) videoRef.current.currentTime = INTRO_END;
+                  }}
+                  className="glass absolute bottom-20 right-4 rounded-full px-4 py-2 text-sm font-semibold"
+                >
+                  Skip intro
+                </button>
+              )}
+              {countdown !== null && nextHref && (
+                <div className="absolute inset-0 grid place-items-center bg-black/70">
+                  <div className="text-center">
+                    <p className="mb-4 text-white/80">Next episode in {countdown}s</p>
+                    <div className="flex justify-center gap-3">
+                      <button onClick={() => router.push(nextHref)} className="rounded-full bg-white px-5 py-2 font-semibold text-black">Play now</button>
+                      <button onClick={() => setCountdown(null)} className="glass rounded-full px-5 py-2">Cancel</button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </>
           )}
           {token.type === "youtube" && (
@@ -222,15 +297,20 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
           )}
           {isFrame && frame === "slow" && (
             <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-3 bg-black/80 px-4 py-2 text-sm text-white/80">
-              <span>{source.label} hasn’t responded. {kindHint}</span>
+              <span>This source failed to load ({source.label}). {kindHint}</span>
               {nextPlayable(ordered, index) >= 0 && (
                 <button onClick={() => select(nextPlayable(ordered, index), true)} className="shrink-0 rounded-full bg-white px-3 py-1 font-medium text-black">
-                  Try next source
+                  Try another source
                 </button>
               )}
             </div>
           )}
         </div>
+      )}
+      {nextHref && (
+        <Link href={nextHref} className="mt-4 inline-block rounded-full bg-white/10 px-4 py-1.5 text-sm font-medium hover:bg-white/20">
+          Next episode →
+        </Link>
       )}
       {ordered.length > 1 && (
         <div role="radiogroup" aria-label="Source" className="mt-4 flex flex-wrap gap-2">

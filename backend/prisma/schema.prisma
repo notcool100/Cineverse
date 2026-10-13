@@ -38,6 +38,8 @@ model User {
   createdAt    DateTime @default(now())
   watchlist    WatchlistItem[]
   history      WatchHistory[]
+  ratings      Rating[]
+  profiles     Profile[]
   refreshTokens RefreshToken[]
 }
 
@@ -64,17 +66,29 @@ model Title {
   posterPath   String?
   backdropPath String?
   posterCredit String?
+  /// YouTube video id of the official trailer (TMDB), used for hero and hover previews.
+  trailerKey   String?
+  /// TMDB cast and crew: { cast: [{ name, character, profilePath }], crew: [{ name, job, profilePath }] }.
+  credits      Json?
   backdropCredit String?
   accent       String[]
   releaseDate  DateTime?
   genres       String[]
+  /// TMDB original_language (ISO 639-1), e.g. "hi", "ta", "en".
+  language     String?
+  /// TMDB popularity and vote count; the main ranking signal for home rows.
+  popularity   Float     @default(0)
+  voteCount    Int       @default(0)
   published    Boolean   @default(false)
   createdAt    DateTime  @default(now())
   sources      Source[]
   episodes     Episode[]
   watchlist    WatchlistItem[]
   history      WatchHistory[]
+  ratings      Rating[]
   @@index([published, createdAt])
+  @@index([published, language])
+  @@index([published, popularity])
 }
 
 model Episode {
@@ -83,6 +97,10 @@ model Episode {
   season  Int
   number  Int
   name    String?
+  overview   String?
+  /// TMDB still path (bare, e.g. "/abc.jpg").
+  stillPath  String?
+  runtimeMin Int?
   title   Title   @relation(fields: [titleId], references: [id], onDelete: Cascade)
   sources Source[]
   @@unique([titleId, season, number])
@@ -111,6 +129,8 @@ model EmbedProvider {
   urlTemplate        String
   episodeUrlTemplate String?
   licenseRef         String
+  /// ISO 639-1 codes of the audio/subtitle languages this server offers, e.g. ["en","hi"].
+  languages          String[] @default([])
   enabled            Boolean @default(false)
   priority           Int     @default(0)
 }
@@ -121,18 +141,34 @@ model AllowedHost {
   createdAt DateTime @default(now())
 }
 
+/// Netflix-style viewer profile under an account. Watchlist, history and ratings are scoped to a profile
+/// via `profileId`; "" marks legacy rows from before profiles and is adopted by the first profile created.
+/// (profileId is a plain string, not an FK, so those legacy rows stay valid.)
+model Profile {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  avatar    String   @default("0")
+  isKids    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
 model WatchlistItem {
   userId  String
+  profileId String @default("")
   titleId String
   addedAt DateTime @default(now())
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title   Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
-  @@id([userId, titleId])
+  @@id([userId, profileId, titleId])
 }
 
 model WatchHistory {
   id          String   @id @default(cuid())
   userId      String
+  profileId   String   @default("")
   titleId     String
   episodeId   String   @default("")
   positionSec Int
@@ -140,5 +176,17 @@ model WatchHistory {
   updatedAt   DateTime @updatedAt
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title       Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
-  @@unique([userId, titleId, episodeId])
+  @@unique([userId, profileId, titleId, episodeId])
+}
+
+/// Thumbs up (1) or down (-1); feeds the personalized home rows.
+model Rating {
+  userId    String
+  profileId String   @default("")
+  titleId   String
+  value     Int
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@id([userId, profileId, titleId])
 }

@@ -57,8 +57,8 @@ export class SearchService implements OnApplicationBootstrap {
     }
   }
 
-  async search(q: string, o: { type?: "MOVIE" | "SERIES"; genre?: string; page: number; limit: number }) {
-    if (this.client) {
+  async search(q: string, o: { type?: "MOVIE" | "SERIES"; genre?: string; language?: string; page: number; limit: number }) {
+    if (this.client && !o.language) {
       try {
         const filter = [o.type && `type = "${o.type}"`, o.genre && `genres = "${o.genre.replace(/"/g, "")}"`].filter(Boolean) as string[];
         const res = await this.client.index<Doc>("titles").search(q, {
@@ -75,7 +75,7 @@ export class SearchService implements OnApplicationBootstrap {
         this.log.warn(`meili search failed, using Postgres: ${(e as Error).message}`);
       }
     }
-    return this.titles.list({ q, type: o.type, genre: o.genre, page: o.page, limit: o.limit });
+    return this.titles.list({ q, type: o.type, genre: o.genre, language: o.language, page: o.page, limit: o.limit });
   }
 }
 

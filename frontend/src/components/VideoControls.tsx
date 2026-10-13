@@ -4,6 +4,22 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const HIDE_MS = 2800;
+const DOUBLE_TAP_MS = 280;
+const PREFS_KEY = "cineora.player";
+
+/** Volume, mute and speed persist across titles and visits. */
+function loadPlayerPrefs(): { volume?: number; muted?: boolean; rate?: number } {
+  try {
+    return JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function savePlayerPrefs(v: HTMLVideoElement) {
+  try {
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ volume: v.volume, muted: v.muted, rate: v.playbackRate }));
+  } catch {}
+}
 
 /** h:mm:ss always, e.g. 0:00:06 / 2:10:08. */
 const fmt = (s: number) => {
@@ -56,10 +72,12 @@ interface Props {
   sources?: ControlSource[];
   activeSourceId?: string;
   onSelectSource?: (index: number) => void;
+  /** Plain video file URL; enables a frame preview while scrubbing (not possible for segmented HLS). */
+  previewSrc?: string;
 }
 
 /** Overlay controls for a <video> inside a relatively positioned parent (which is also the full-screen target). */
-export function VideoControls({ videoRef, sources = [], activeSourceId, onSelectSource }: Props) {
+export function VideoControls({ videoRef, sources = [], activeSourceId, onSelectSource, previewSrc }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [s, setS] = useState({ playing: false, time: 0, duration: 0, buffered: 0, volume: 1, muted: false, rate: 1 });
@@ -67,6 +85,20 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
   const [shown, setShown] = useState(true);
   const [fs, setFs] = useState(false);
   const [menu, setMenu] = useState<null | "settings" | "sources">(null);
+  const [osd, setOsd] = useState<{ text: string; n: number } | null>(null);
+  const [scrub, setScrub] = useState<{ x: number; t: number; w: number } | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const previewRef = useRef<HTMLVideoElement>(null);
+  const osdTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const lastTap = useRef<{ t: number; x: number } | null>(null);
+  const tapTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const pointerType = useRef("mouse");
+
+  const flash = useCallback((text: string) => {
+    setOsd((o) => ({ text, n: (o?.n ?? 0) + 1 }));
+    clearTimeout(osdTimer.current);
+    osdTimer.current = setTimeout(() => setOsd(null), 700);
+  }, []);
 
   const wake = useCallback(() => {
     setShown(true);
@@ -82,6 +114,13 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
+    const saved = loadPlayerPrefs();
+    if (typeof saved.volume === "number") v.volume = Math.min(1, Math.max(0, saved.volume));
+    if (typeof saved.muted === "boolean") v.muted = saved.muted;
+    if (typeof saved.rate === "number" && RATES.includes(saved.rate)) v.playbackRate = saved.rate;
+    const persist = () => savePlayerPrefs(v);
+    v.addEventListener("volumechange", persist);
+    v.addEventListener("ratechange", persist);
     const sync = () =>
       setS({
         playing: !v.paused && !v.ended,
@@ -105,7 +144,11 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
       v.removeEventListener("waiting", wait);
       v.removeEventListener("playing", ready);
       v.removeEventListener("canplay", ready);
+      v.removeEventListener("volumechange", persist);
+      v.removeEventListener("ratechange", persist);
       clearTimeout(hideTimer.current);
+      clearTimeout(osdTimer.current);
+      clearTimeout(tapTimer.current);
     };
   }, [videoRef]);
 
@@ -125,16 +168,27 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
   const skip = (d: number) => {
     const v = videoRef.current;
     if (v) v.currentTime = Math.max(0, Math.min(v.duration || Infinity, v.currentTime + d));
+    flash(`${d > 0 ? "+" : "−"}${Math.abs(d)}s`);
     wake();
   };
   const setVolume = (x: number) => {
     const v = videoRef.current;
     if (!v) return;
-    v.volume = x;
-    v.muted = x === 0;
+    v.volume = Math.min(1, Math.max(0, x));
+    v.muted = v.volume === 0;
+  };
+  const nudgeVolume = (d: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    setVolume((v.muted ? 0 : v.volume) + d);
+    flash(`Volume ${Math.round(v.volume * 100)}%`);
+    wake();
   };
   const mute = () => {
-    if (videoRef.current) videoRef.current.muted = !videoRef.current.muted;
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = !v.muted;
+    flash(v.muted ? "Muted" : `Volume ${Math.round(v.volume * 100)}%`);
   };
   const fullscreen = () => {
     const el = rootRef.current?.parentElement;
@@ -149,15 +203,84 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
     else v.requestPictureInPicture().catch(() => {});
   };
 
-  const onKey = (e: React.KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === "INPUT" && e.key !== "f") return;
-    const keys: Record<string, () => void> = {
-      " ": toggle, k: toggle, ArrowLeft: () => skip(-10), ArrowRight: () => skip(10), j: () => skip(-10), l: () => skip(10), m: mute, f: fullscreen,
-    };
-    if (keys[e.key]) {
-      e.preventDefault();
-      keys[e.key]();
+  // Shortcuts work anywhere on the page while the player is mounted, except when typing or on a control that owns the key.
+  const keyRef = useRef<(e: KeyboardEvent) => void>(undefined);
+  const onShortcut = (e: KeyboardEvent) => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = e.target as HTMLElement;
+    if (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName)) {
+      // The seek/volume sliders handle arrows themselves; everything else is theirs too.
+      return;
     }
+    if ((e.key === " " || e.key === "Enter") && ["BUTTON", "A"].includes(el.tagName)) return;
+    const k = e.key.toLowerCase();
+    const keys: Record<string, () => void> = {
+      " ": toggle,
+      k: toggle,
+      arrowleft: () => skip(-5),
+      arrowright: () => skip(5),
+      j: () => skip(-10),
+      l: () => skip(10),
+      arrowup: () => nudgeVolume(0.1),
+      arrowdown: () => nudgeVolume(-0.1),
+      m: mute,
+      f: fullscreen,
+      p: pip,
+    };
+    const digit = /^[0-9]$/.test(k) ? Number(k) : -1;
+    if (digit >= 0) {
+      const v = videoRef.current;
+      if (v?.duration) v.currentTime = (v.duration * digit) / 10;
+      flash(`${digit * 10}%`);
+      wake();
+    } else if (keys[k]) keys[k]();
+    else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    keyRef.current = onShortcut;
+  });
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => keyRef.current?.(e);
+    document.addEventListener("keydown", h);
+    return () => document.removeEventListener("keydown", h);
+  }, []);
+
+  /** Touch: single tap shows/hides controls, double tap on either side seeks 10s, centre toggles play. Mouse: click plays, double-click goes full screen. */
+  const onSurfaceClick = (e: React.MouseEvent<HTMLButtonElement>) => {
+    if (pointerType.current !== "touch") {
+      if (e.detail >= 2) fullscreen();
+      else toggle();
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const now = Date.now();
+    const prev = lastTap.current;
+    clearTimeout(tapTimer.current);
+    if (prev && now - prev.t < DOUBLE_TAP_MS) {
+      lastTap.current = null;
+      if (x < 0.35) skip(-10);
+      else if (x > 0.65) skip(10);
+      else toggle();
+      return;
+    }
+    lastTap.current = { t: now, x };
+    tapTimer.current = setTimeout(() => {
+      lastTap.current = null;
+      if (shown && s.playing) setShown(false);
+      else wake();
+    }, DOUBLE_TAP_MS);
+  };
+
+  const onScrubMove = (e: React.PointerEvent) => {
+    const bar = barRef.current;
+    if (!bar || !s.duration) return;
+    const r = bar.getBoundingClientRect();
+    const x = Math.min(r.width, Math.max(0, e.clientX - r.left));
+    const t = (x / r.width) * s.duration;
+    setScrub({ x, t, w: r.width });
+    if (previewRef.current && Number.isFinite(t)) previewRef.current.currentTime = t;
   };
 
   const visible = shown || !s.playing;
@@ -169,21 +292,31 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
   return (
     <div
       ref={rootRef}
-      tabIndex={0}
-      onKeyDown={onKey}
       onMouseMove={wake}
       onTouchStart={wake}
       onFocus={wake}
       className={`absolute inset-0 select-none text-white outline-none ${visible ? "" : "cursor-none"}`}
     >
       {/* Click surface + centre button / buffering spinner */}
-      <button type="button" aria-label={s.playing ? "Pause" : "Play"} onClick={toggle} className="absolute inset-0 grid place-items-center">
+      <button
+        type="button"
+        aria-label={s.playing ? "Pause" : "Play"}
+        onPointerDown={(e) => (pointerType.current = e.pointerType)}
+        onClick={onSurfaceClick}
+        className="absolute inset-0 grid place-items-center"
+      >
         {waiting ? (
           <span className="size-14 animate-spin rounded-full border-4 border-white/30 border-t-white" role="status" aria-label="Buffering" />
         ) : (
           !s.playing && <span className="rounded-full p-3 text-6xl transition hover:bg-white/15"><Play /></span>
         )}
       </button>
+
+      {osd && (
+        <div key={osd.n} role="status" className="pointer-events-none absolute left-1/2 top-1/3 -translate-x-1/2 rounded-full bg-black/70 px-5 py-2 text-lg font-semibold tabular-nums">
+          {osd.text}
+        </div>
+      )}
 
       {/* Top bar: sources */}
       <div className={`pointer-events-none absolute inset-x-0 top-0 flex justify-end bg-gradient-to-b from-black/80 to-transparent px-4 pb-20 pt-4 sm:px-8 ${fade}`}>
@@ -219,7 +352,23 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
 
       {/* Bottom bar: progress, then controls */}
       <div className={`absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 to-transparent px-4 pb-3 pt-24 sm:px-8 ${fade}`}>
-        <div className="group relative flex h-8 items-center">
+        <div
+          ref={barRef}
+          onPointerMove={onScrubMove}
+          onPointerLeave={() => setScrub(null)}
+          className="group relative flex h-8 items-center"
+        >
+          {scrub && (
+            <div
+              className="pointer-events-none absolute bottom-9 -translate-x-1/2 text-center"
+              style={{ left: Math.min(Math.max(scrub.x, 80), scrub.w - 80) }}
+            >
+              {previewSrc && (
+                <video ref={previewRef} src={previewSrc} muted preload="auto" playsInline tabIndex={-1} aria-hidden className="mb-1 aspect-video w-40 rounded-lg border border-white/20 bg-black object-cover" />
+              )}
+              <span className="rounded bg-black/80 px-2 py-0.5 text-xs tabular-nums">{fmt(scrub.t)}</span>
+            </div>
+          )}
           <div className="relative h-1 w-full rounded-full bg-white/25 transition-[height] duration-100 group-hover:h-1.5">
             <div className="absolute inset-y-0 left-0 rounded-full bg-white/40" style={{ width: `${pct(s.buffered)}%` }} />
             <div className="absolute inset-y-0 left-0 flex items-center justify-end rounded-full bg-accent" style={{ width: `${pct(s.time)}%` }}>
@@ -242,8 +391,8 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-1 sm:gap-3">
             <button type="button" aria-label={s.playing ? "Pause" : "Play"} onClick={toggle} className={btn}>{s.playing ? <Pause /> : <Play />}</button>
-            <button type="button" aria-label="Back 10 seconds" onClick={() => skip(-10)} className={btn}><Skip back /></button>
-            <button type="button" aria-label="Forward 10 seconds" onClick={() => skip(10)} className={btn}><Skip /></button>
+            <button type="button" aria-label="Back 10 seconds" title="Back 10 seconds (J)" onClick={() => skip(-10)} className={btn}><Skip back /></button>
+            <button type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds (L)" onClick={() => skip(10)} className={btn}><Skip /></button>
             <div className="group/vol flex items-center">
               <button type="button" aria-label={volLevel === 0 ? "Unmute" : "Mute"} onClick={mute} className={`${btn} !text-2xl`}><Vol level={volLevel} /></button>
               <input

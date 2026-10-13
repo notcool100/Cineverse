@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
 import { Navbar } from "@/components/Navbar";
@@ -14,7 +15,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" suppressHydrationWarning className={`${geistSans.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
-        <Navbar />
+        <Suspense>
+          <Navbar />
+        </Suspense>
         <main className="flex-1">{children}</main>
         <footer className="mt-16 border-t border-white/8 px-4 py-8 text-center text-xs text-white/35">
           Metadata courtesy of TMDB. Cineora streams only licensed or public-domain content.

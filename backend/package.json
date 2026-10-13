@@ -55,15 +55,5 @@
     "unplugin-swc": "^2.0.0",
     "vitest": "^5.0.4"
   },
-  "private": true,
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
-      "prisma",
-      "argon2",
-      "@swc/core",
-      "esbuild"
-    ]
-  }
+  "private": true
 }

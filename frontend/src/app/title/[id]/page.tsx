@@ -80,7 +80,7 @@ async function TitleContent({ params }: { params: PageProps<"/title/[id]">["para
               {title.overview}
             </p>
 
-            <TitleActions titleId={title.id} sources={title.sources} />
+            <TitleActions titleId={title.id} sources={title.sources} titleType={title.type} />
           </div>
         </div>
       </section>

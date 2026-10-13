@@ -2,6 +2,7 @@
 
 import { cacheLife } from "next/cache";
 import type { Source, Title } from "./types";
+import { imageUrl } from "./image-url";
 
 // Server-side catalog reads from the Cineora API (GET /titles, /titles/:id). Cached for a few minutes.
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
@@ -21,6 +22,7 @@ interface ApiTitle {
   backdropCredit: string | null;
   accent: string[];
   sources: Source[];
+  episodes?: { season: number; number: number }[];
 }
 
 function toTitle(t: ApiTitle): Title {
@@ -33,12 +35,13 @@ function toTitle(t: ApiTitle): Title {
     runtimeMin: t.runtimeMin ?? 0,
     genres: t.genres,
     rating: t.rating ?? "NR",
-    poster: t.posterPath ?? "",
+    poster: imageUrl(t.posterPath, "w500"),
     posterCredit: t.posterCredit ?? "",
-    backdrop: t.backdropPath ?? "",
+    backdrop: imageUrl(t.backdropPath, "w1280"),
     backdropCredit: t.backdropCredit ?? "",
     accent: [t.accent[0] ?? "#333333", t.accent[1] ?? "#0a0a0a"],
     sources: t.sources,
+    episodes: t.episodes?.map((e) => ({ season: e.season, number: e.number })),
   };
 }
 

@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Req, UseGuards, Logger } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Req, UseGuards, Logger } from "@nestjs/common";
 import { Type } from "class-transformer";
-import { ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsInt, IsOptional, IsString, IsUrl, Matches, MaxLength, Min, MinLength } from "class-validator";
+import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
 import { PartialType } from "@nestjs/swagger";
 import { SourceKind, TitleType } from "@prisma/client";
 import { AuthGuard, Roles, type AuthedRequest } from "../auth/auth.guard";
@@ -9,7 +9,10 @@ import { requireEnv } from "../common/secrets";
 import { SearchService } from "../search/search.service";
 import { TitlesService } from "../titles/titles.service";
 import { RedisService } from "../common/redis.service";
-import { isBlockedProvider } from "./blocklist";
+import * as argon2 from "argon2";
+import { Prisma } from "@prisma/client";
+import { loadDbHosts } from "../playback/embed-hosts";
+import { envEmbedHosts, isValidHost, validateTemplate } from "../playback/embed-template";
 
 class CreateTitleDto {
   @Matches(/^[a-z0-9]+(-[a-z0-9]+)*$/) @MaxLength(100) slug: string;
@@ -42,8 +45,8 @@ class CreateSourceDto {
 class ProviderDto {
   @Matches(/^[a-z0-9-]+$/) slug: string;
   @IsString() @MaxLength(60) label: string;
-  @IsUrl({ protocols: ["https"], require_protocol: true }) urlTemplate: string;
-  @IsOptional() @IsString() episodeUrlTemplate?: string;
+  @IsString() @MaxLength(2000) urlTemplate: string;
+  @IsOptional() @IsString() @MaxLength(2000) episodeUrlTemplate?: string;
   @IsOptional() @IsString() licenseRef?: string;
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @Type(() => Number) @IsInt() priority?: number;
@@ -52,6 +55,15 @@ class ProviderDto {
 interface TmdbMovie {
   title?: string; name?: string; overview?: string; poster_path?: string; backdrop_path?: string;
   release_date?: string; first_air_date?: string; runtime?: number; genres?: { name: string }[];
+}
+
+class HostDto {
+  @IsString() @MaxLength(253) host: string;
+}
+
+class AdminUserDto {
+  @IsEmail() email: string;
+  @IsString() @MinLength(12) @MaxLength(200) password: string;
 }
 
 class ImportTmdbDto {
@@ -93,7 +105,10 @@ export class AdminController {
   }
 
   @Patch("titles/:id") async updateTitle(@Req() req: AuthedRequest, @Param("id") id: string, @Body() dto: UpdateTitleDto) {
-    const t = await this.prisma.title.update({ where: { id }, data: dto }).catch(() => null);
+    const t = await this.prisma.title.update({ where: { id }, data: dto }).catch((e) => {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") throw new ConflictException("That TMDB id or slug is already used by another title");
+      return null;
+    });
     if (!t) throw new NotFoundException();
     await this.refresh(id);
     this.audit(req, "title.update", id);
@@ -152,6 +167,40 @@ export class AdminController {
     return p;
   }
 
+  @Get("embed-hosts") async hosts() {
+    return { env: envEmbedHosts(), added: (await this.prisma.allowedHost.findMany({ orderBy: { host: "asc" } })).map((h) => h.host) };
+  }
+
+  @Post("embed-hosts") async addHost(@Req() req: AuthedRequest, @Body() dto: HostDto) {
+    const host = dto.host.trim().toLowerCase();
+    if (!isValidHost(host)) throw new BadRequestException("Enter a bare hostname such as player.example.com (no scheme, port, path or IP)");
+    await this.prisma.allowedHost.upsert({ where: { host }, create: { host }, update: {} });
+    await loadDbHosts(this.prisma);
+    this.audit(req, "host.add", host);
+    return { host };
+  }
+
+  @Delete("embed-hosts/:host") @HttpCode(204) async removeHost(@Req() req: AuthedRequest, @Param("host") host: string) {
+    await this.prisma.allowedHost.delete({ where: { host: host.toLowerCase() } }).catch(() => {
+      throw new NotFoundException();
+    });
+    await loadDbHosts(this.prisma);
+    this.audit(req, "host.remove", host);
+  }
+
+  /** Creates an admin, or promotes/updates the existing user with that email. The first admin comes from `pnpm db:seed`. */
+  @Post("admins") async setAdmin(@Req() req: AuthedRequest, @Body() dto: AdminUserDto) {
+    const email = dto.email.toLowerCase();
+    const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
+    const u = await this.prisma.user.upsert({
+      where: { email },
+      create: { email, passwordHash, role: "ADMIN" },
+      update: { passwordHash, role: "ADMIN" },
+    });
+    this.audit(req, "admin.set", u.id);
+    return { id: u.id, email: u.email, role: u.role };
+  }
+
   /** Metadata only (posters, overview, genres). Imported titles stay unpublished until reviewed. */
   @Post("titles/import-tmdb") async importTmdb(@Req() req: AuthedRequest, @Body() dto: ImportTmdbDto) {
     const kind = dto.type === "MOVIE" ? "movie" : "tv";
@@ -186,9 +235,10 @@ export class AdminController {
     return t;
   }
 
-  private checkProvider(p: { slug: string; label: string; urlTemplate: string; licenseRef?: string | null; enabled?: boolean }) {
-    if (isBlockedProvider(p.slug, p.label, p.urlTemplate))
-      throw new BadRequestException("This provider is on the unlicensed blocklist (PROJECT.md §2)");
-    if (p.enabled && !p.licenseRef?.trim()) throw new BadRequestException("licenseRef is required to enable a provider");
+  private checkProvider(p: { slug: string; label: string; urlTemplate: string; episodeUrlTemplate?: string | null; licenseRef?: string | null; enabled?: boolean }) {
+    for (const tpl of [p.urlTemplate, p.episodeUrlTemplate]) {
+      const err = tpl ? validateTemplate(tpl) : null;
+      if (err) throw new BadRequestException(err);
+    }
   }
 }

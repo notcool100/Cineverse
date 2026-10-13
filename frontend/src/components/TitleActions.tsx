@@ -3,17 +3,27 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { Source } from "@/lib/types";
-import { addToWatchlist, getWatchlist, removeFromWatchlist } from "@/lib/client-api";
+import type { Source, TitleType } from "@/lib/types";
+import { buildEntries, isPlayable, type ProviderInfo } from "@/lib/sources";
+import { addToWatchlist, getEmbedProviders, getWatchlist, removeFromWatchlist } from "@/lib/client-api";
 import { PlayGlyph } from "./Poster";
 import { SourceSwitcher } from "./SourceSwitcher";
 import { useUser } from "./useSession";
 
-export function TitleActions({ titleId, sources }: { titleId: string; sources: Source[] }) {
+export function TitleActions({ titleId, sources, titleType }: { titleId: string; sources: Source[]; titleType?: TitleType }) {
   const router = useRouter();
   const user = useUser();
-  const ordered = [...sources].sort((a, b) => a.priority - b.priority);
-  const [sourceId, setSourceId] = useState(ordered[0]?.id);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const ordered = buildEntries(sources, providers, titleType);
+  const [sourceId, setSourceId] = useState(sources[0]?.id);
+  useEffect(() => {
+    if (!user) return;
+    let live = true;
+    getEmbedProviders().then((p) => live && setProviders(p)).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [user]);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -41,7 +51,7 @@ export function TitleActions({ titleId, sources }: { titleId: string; sources: S
   return (
     <>
       <div className="rise rise-3 mt-8 flex flex-wrap gap-3">
-        {sourceId ? (
+        {sourceId && isPlayable(ordered.find((e) => e.id === sourceId)) ? (
           <Link
             href={`/watch/${titleId}?source=${sourceId}`}
             className="inline-flex items-center gap-2.5 rounded-md bg-white px-8 py-3 text-base font-semibold text-black transition hover:bg-white/90"

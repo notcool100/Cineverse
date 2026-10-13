@@ -115,6 +115,12 @@ model EmbedProvider {
   priority           Int     @default(0)
 }
 
+/// Embed hosts added from the admin panel; merged with EMBED_ALLOWED_HOSTS.
+model AllowedHost {
+  host      String   @id
+  createdAt DateTime @default(now())
+}
+
 model WatchlistItem {
   userId  String
   titleId String

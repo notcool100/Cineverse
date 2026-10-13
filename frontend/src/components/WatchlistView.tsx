@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { getHistory, getWatchlist, type ApiTitleLite, type HistoryEntry } from "@/lib/client-api";
+import { imageUrl } from "@/lib/image-url";
 import type { Title } from "@/lib/types";
 import { TitleCard } from "./TitleCard";
 import { useUser } from "./useSession";
@@ -14,7 +15,7 @@ const asTitle = (t: ApiTitleLite): Title =>
     name: t.name,
     year: t.year ?? 0,
     genres: t.genres,
-    poster: t.posterPath ?? "",
+    poster: imageUrl(t.posterPath, "w500"),
     accent: [t.accent[0] ?? "#333", t.accent[1] ?? "#0a0a0a"],
   }) as Title;
 

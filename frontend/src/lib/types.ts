@@ -35,4 +35,6 @@ export interface Title {
   /** CSS gradient stand-in until real posters come from TMDB/R2. */
   accent: [string, string];
   sources: Source[];
+  /** Series only: season/number pairs, present on the single-title response. */
+  episodes?: { season: number; number: number }[];
 }

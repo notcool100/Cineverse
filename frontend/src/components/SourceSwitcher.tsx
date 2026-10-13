@@ -1,13 +1,13 @@
 "use client";
 
-import type { Source } from "@/lib/types";
+import type { PickerEntry } from "@/lib/sources";
 
 export function SourceSwitcher({
   sources,
   selected,
   onSelect,
 }: {
-  sources: Source[];
+  sources: PickerEntry[];
   selected: string | undefined;
   onSelect: (id: string) => void;
 }) {
@@ -23,14 +23,17 @@ export function SourceSwitcher({
             type="button"
             role="radio"
             aria-checked={active}
+            disabled={s.state !== "enabled"}
+            title={s.state === "unconfigured" ? "Not configured" : s.state === "disabled" ? "Disabled" : undefined}
             onClick={() => onSelect(s.id)}
-            className={`rounded-full border px-4 py-1.5 text-sm font-medium transition ${
+            className={`rounded-full border px-4 py-1.5 text-sm font-medium transition ${s.state !== "enabled" ? "cursor-not-allowed opacity-40 " : ""}${
               active
                 ? "border-accent bg-accent text-white shadow-[0_0_24px_-4px_var(--accent)]"
                 : "glass-soft text-white/75 hover:text-white"
             }`}
           >
             {s.label}
+            {s.state !== "enabled" && <span className="ml-1.5 text-xs">· {s.state === "unconfigured" ? "not configured" : "disabled"}</span>}
           </button>
         );
       })}

@@ -1,4 +1,5 @@
 "use client";
+import type { ProviderInfo } from "./sources";
 
 // Browser-side API client. Tokens live in localStorage (the API is bearer-token based).
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -107,6 +108,10 @@ export type PlaybackToken =
 export const getPlaybackToken = (sourceId: string) =>
   authed<PlaybackToken>("/playback/token", { method: "POST", body: JSON.stringify({ sourceId }) });
 
+export const getEmbedProviders = () => authed<ProviderInfo[]>("/playback/providers");
+export const getEmbedToken = (slug: string, titleId: string, season?: number, episode?: number) =>
+  authed<{ type: "embed"; url: string }>("/playback/embed-token", { method: "POST", body: JSON.stringify({ slug, titleId, season, episode }) });
+
 export const getWatchlist = () => authed<{ title: ApiTitleLite }[]>("/me/watchlist");
 export const addToWatchlist = (titleId: string) =>
   authed<void>("/me/watchlist", { method: "POST", body: JSON.stringify({ titleId }) });
@@ -131,3 +136,38 @@ export interface ApiTitleLite {
   posterPath: string | null;
   accent: string[];
 }
+
+// ---- Admin (requires an ADMIN user) ----
+export interface AdminProviderRow {
+  slug: string;
+  urlTemplate: string;
+  episodeUrlTemplate: string | null;
+  licenseRef: string;
+  enabled: boolean;
+}
+export interface AdminTitle {
+  id: string;
+  slug: string;
+  name: string;
+  type: "MOVIE" | "SERIES";
+  tmdbId: number | null;
+  published: boolean;
+}
+const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
+
+export const adminProviders = () => authed<AdminProviderRow[]>("/admin/embed-providers");
+export const adminSaveProvider = (
+  exists: boolean,
+  p: { slug: string; label: string; priority: number; urlTemplate: string; episodeUrlTemplate: string; licenseRef: string; enabled: boolean },
+) => {
+  const { slug, ...rest } = p;
+  return exists
+    ? authed<unknown>(`/admin/embed-providers/${encodeURIComponent(slug)}`, json("PATCH", rest))
+    : authed<unknown>("/admin/embed-providers", json("POST", p));
+};
+export const adminHosts = () => authed<{ env: string[]; added: string[] }>("/admin/embed-hosts");
+export const adminAddHost = (host: string) => authed<unknown>("/admin/embed-hosts", json("POST", { host }));
+export const adminRemoveHost = (host: string) => authed<void>(`/admin/embed-hosts/${encodeURIComponent(host)}`, json("DELETE"));
+export const adminTitles = () => authed<AdminTitle[]>("/admin/titles");
+export const adminSetTmdbId = (id: string, tmdbId: number) => authed<unknown>(`/admin/titles/${encodeURIComponent(id)}`, json("PATCH", { tmdbId }));
+export const adminSetAdmin = (email: string, password: string) => authed<unknown>("/admin/admins", json("POST", { email, password }));

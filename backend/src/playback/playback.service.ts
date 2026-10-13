@@ -1,7 +1,10 @@
-import { Injectable, NotFoundException, ServiceUnavailableException } from "@nestjs/common";
+import { Injectable, NotFoundException, OnModuleInit, ServiceUnavailableException } from "@nestjs/common";
 import { createHmac } from "node:crypto";
 import { PrismaService } from "../common/prisma.service";
 import { requireEnv } from "../common/secrets";
+import { loadDbHosts } from "./embed-hosts";
+import { buildEmbedUrl, validateTemplate } from "./embed-template";
+import { PROVIDER_REGISTRY, describeProviders } from "./provider-registry";
 
 const TTL_SEC = 300;
 
@@ -13,8 +16,30 @@ export function signUrl(base: string, key: string, secret: string, now = Date.no
 }
 
 @Injectable()
-export class PlaybackService {
+export class PlaybackService implements OnModuleInit {
   constructor(private readonly prisma: PrismaService) {}
+
+  onModuleInit() {
+    return loadDbHosts(this.prisma);
+  }
+
+  /** Every registry provider with its current state; unconfigured ones are listed but not playable. */
+  async providers() {
+    const rows = await this.prisma.embedProvider.findMany({ where: { slug: { in: PROVIDER_REGISTRY.map((p) => p.slug) } } });
+    return describeProviders(rows, (tpl) => validateTemplate(tpl) === null);
+  }
+
+  /** Embed URL for a registry provider, built server-side from the stored template (never from client input). */
+  async embedToken(slug: string, titleIdOrSlug: string, season?: number, episode?: number) {
+    const p = PROVIDER_REGISTRY.some((r) => r.slug === slug) && (await this.prisma.embedProvider.findUnique({ where: { slug } }));
+    const title = await this.prisma.title.findFirst({ where: { published: true, OR: [{ id: titleIdOrSlug }, { slug: titleIdOrSlug }] } });
+    if (!p || !title || !p.enabled) throw new NotFoundException();
+    const tv = title.type === "SERIES";
+    const tpl = tv ? p.episodeUrlTemplate : p.urlTemplate;
+    const url = tpl && buildEmbedUrl(tpl, { tmdbId: title.tmdbId, season: tv ? season : undefined, episode: tv ? episode : undefined });
+    if (!url) throw new NotFoundException();
+    return { type: "embed" as const, url };
+  }
 
   async token(sourceId: string, episodeId?: string) {
     const s = await this.prisma.source.findUnique({
@@ -38,14 +63,13 @@ export class PlaybackService {
         return { type: "link" as const, url: s.externalUrl };
       case "EMBED_PROVIDER": {
         const p = await this.prisma.embedProvider.findUnique({ where: { slug: s.externalUrl ?? "" } });
-        if (!p?.enabled || !p.licenseRef || !title.tmdbId) throw new NotFoundException();
+        if (!p?.enabled) throw new NotFoundException();
         const ep = s.episode;
         const tpl = ep ? p.episodeUrlTemplate : p.urlTemplate;
         if (!tpl) throw new NotFoundException();
-        const url = tpl
-          .replaceAll("{tmdbId}", String(title.tmdbId))
-          .replaceAll("{season}", String(ep?.season ?? ""))
-          .replaceAll("{episode}", String(ep?.number ?? ""));
+        // Re-validated on every request so a stale or tampered row can never emit an off-allowlist URL.
+        const url = buildEmbedUrl(tpl, { tmdbId: title.tmdbId, season: ep?.season, episode: ep?.number });
+        if (!url) throw new NotFoundException();
         return { type: "embed" as const, url };
       }
     }

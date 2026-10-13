@@ -7,12 +7,17 @@ import { TitlesService } from "./titles.service";
 class ListDto {
   @IsOptional() @IsString() @MaxLength(50) genre?: string;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1888) @Max(2100) year?: number;
+  @IsOptional() @IsIn(["MOVIE", "SERIES"]) type?: "MOVIE" | "SERIES";
   @IsOptional() @IsIn(["newest", "name", "year"]) sort?: "newest" | "name" | "year";
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(50) limit?: number;
 }
 class SearchDto {
   @IsString() @MaxLength(100) q: string;
+  @IsOptional() @IsIn(["MOVIE", "SERIES"]) type?: "MOVIE" | "SERIES";
+  @IsOptional() @IsString() @MaxLength(50) genre?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(50) limit?: number;
 }
 
 @Controller()
@@ -26,7 +31,10 @@ export class TitlesController {
     return this.titles.list({ ...d, page: d.page ?? 1, limit: d.limit ?? 20 });
   }
   @Get("search") search(@Query() d: SearchDto) {
-    return this.search_.search(d.q);
+    return this.search_.search(d.q, { type: d.type, genre: d.genre, page: d.page ?? 1, limit: d.limit ?? 20 });
+  }
+  @Get("genres") genres() {
+    return this.titles.genres();
   }
   @Get("titles/:id") get(@Param("id") id: string) {
     return this.titles.get(id);

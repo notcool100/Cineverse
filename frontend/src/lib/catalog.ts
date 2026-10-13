@@ -65,7 +65,35 @@ export async function getTitle(id: string): Promise<Title | undefined> {
 }
 
 export async function getGenres(): Promise<string[]> {
-  return [...new Set((await getTitles()).flatMap((t) => t.genres))].sort();
+  cacheLife("minutes");
+  return (await api<string[]>("/genres")) ?? [];
+}
+
+export interface BrowseQuery {
+  q?: string;
+  type?: Title["type"];
+  genre?: string;
+  sort?: "newest" | "name" | "year";
+  page: number;
+  limit: number;
+}
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/** Paginated catalog listing; goes through /search when a text query is present. */
+export async function browseTitles(q: BrowseQuery): Promise<Page<Title>> {
+  cacheLife("minutes");
+  const p = new URLSearchParams({ page: String(q.page), limit: String(q.limit) });
+  if (q.type) p.set("type", q.type);
+  if (q.genre) p.set("genre", q.genre);
+  if (q.q) p.set("q", q.q);
+  else if (q.sort) p.set("sort", q.sort);
+  const data = await api<Page<ApiTitle>>(`${q.q ? "/search" : "/titles"}?${p}`);
+  return { ...(data ?? { total: 0, page: q.page, limit: q.limit }), items: (data?.items ?? []).map(toTitle) };
 }
 
 export async function getTitlesByGenre(genre: string): Promise<Title[]> {

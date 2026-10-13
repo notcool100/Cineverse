@@ -62,6 +62,8 @@ export interface ProviderInfo extends RegistryProvider {
   order: number;
   state: ProviderState;
   types: ContentType[];
+  /** https origin of the validated template; lets clients measure latency to pick the fastest provider. */
+  origin?: string;
 }
 
 /** Merges the registry with stored config. `valid` reports whether a template passes URL validation. */
@@ -73,6 +75,9 @@ export function describeProviders(rows: ProviderRow[], valid: (tpl: string) => b
     if (row?.urlTemplate && valid(row.urlTemplate)) types.push("movie");
     if (row?.episodeUrlTemplate && valid(row.episodeUrlTemplate)) types.push("tv");
     const state: ProviderState = !types.length ? "unconfigured" : row!.enabled ? "enabled" : "disabled";
-    return { ...p, order, state, types };
+    const tpl = row?.urlTemplate || row?.episodeUrlTemplate;
+    return { ...p, order, state, types, ...(state === "enabled" && tpl ? { origin: originOf(tpl) } : {}) };
   });
 }
+
+const originOf = (tpl: string) => new URL(tpl.replace(/\{[^}]*\}/g, "0")).origin;

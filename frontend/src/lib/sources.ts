@@ -10,6 +10,8 @@ export interface ProviderInfo {
   order: number;
   state: ProviderState;
   types: ("movie" | "tv")[];
+  /** Provider's https origin, probed from the browser to rank by latency. */
+  origin?: string;
 }
 
 export interface PickerEntry {
@@ -20,6 +22,8 @@ export interface PickerEntry {
   /** Set for registry providers; the token comes from /playback/embed-token instead of a stored Source. */
   providerSlug?: string;
   state: ProviderState;
+  /** Measured round-trip to the provider in ms, when probed successfully. */
+  latencyMs?: number;
 }
 
 const PROVIDER_PRIORITY_BASE = 1000;
@@ -28,11 +32,14 @@ export function buildEntries(
   sources: { id: string; kind: string; label: string; priority: number }[],
   providers: ProviderInfo[],
   titleType: "MOVIE" | "SERIES" = "MOVIE",
+  latency: Record<string, number> = {},
 ): PickerEntry[] {
   const own = sources.map((s): PickerEntry => ({ ...s, state: "enabled" }));
   const need = titleType === "SERIES" ? "tv" : "movie";
+  // Probed providers first (fastest to slowest); unprobed or unreachable ones keep registry order after them.
+  const rank = (p: ProviderInfo) => latency[p.slug] ?? Infinity;
   const reg = [...providers]
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => (rank(a) === rank(b) ? a.order - b.order : rank(a) - rank(b)))
     .map(
       (p): PickerEntry => ({
         id: `provider:${p.slug}`,
@@ -40,6 +47,7 @@ export function buildEntries(
         label: p.label,
         priority: PROVIDER_PRIORITY_BASE + p.order,
         providerSlug: p.slug,
+        latencyMs: latency[p.slug],
         // A configured provider that lacks a template for this content type can't play it.
         state: p.state === "enabled" && !p.types.includes(need) ? "disabled" : p.state,
       }),

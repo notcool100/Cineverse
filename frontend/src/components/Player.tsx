@@ -5,6 +5,7 @@ import Link from "next/link";
 import type shaka from "shaka-player";
 import type { Source, TitleType } from "@/lib/types";
 import { getEmbedProviders, getEmbedToken, getHistory, getPlaybackToken, saveProgress, type PlaybackToken } from "@/lib/client-api";
+import { probeProviders } from "@/lib/latency";
 import { buildEntries, initialIndex, nextPlayable, type PickerEntry, type ProviderInfo } from "@/lib/sources";
 import { useUser } from "./useSession";
 import { VideoControls } from "./VideoControls";
@@ -41,18 +42,38 @@ interface Props {
 export function Player(props: Props) {
   const user = useUser();
   const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [latency, setLatency] = useState<Record<string, number> | null>(null);
   useEffect(() => {
     if (!user) return;
     let live = true;
     getEmbedProviders()
       .then((p) => live && setProviders(p))
-      .catch(() => live && setProviders([]));
+      .catch((e) => {
+        if (!live) return;
+        console.error("Failed to load /playback/providers", e);
+        setFailed(true);
+        setProviders([]);
+      });
     return () => {
       live = false;
     };
   }, [user]);
-  if (user && !providers) return <Notice>Loading…</Notice>;
-  return <PlayerInner {...props} entries={buildEntries(props.sources, providers ?? [], props.titleType)} />;
+  // Rank providers by measured latency before choosing the starting source.
+  useEffect(() => {
+    if (!providers) return;
+    let live = true;
+    probeProviders(providers)
+      .then((ms) => live && setLatency(ms))
+      .catch(() => live && setLatency({}));
+    return () => {
+      live = false;
+    };
+  }, [providers]);
+  if (user && (!providers || (!latency && !failed))) return <Notice>{providers ? "Finding the fastest server…" : "Loading…"}</Notice>;
+  if (failed && props.sources.length === 0)
+    return <Notice>Couldn&apos;t reach the streaming API. Check your connection and reload; if it persists, the site&apos;s API URL or CORS settings are misconfigured.</Notice>;
+  return <PlayerInner {...props} entries={buildEntries(props.sources, providers ?? [], props.titleType, latency ?? {})} />;
 }
 
 /** Plays the chosen source; on failure falls back to the next playable source in order. */
@@ -179,7 +200,7 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
             <iframe
               title={titleName}
               src={token.url}
-              sandbox="allow-scripts allow-same-origin allow-presentation"
+              // sandbox="allow-scripts allow-same-origin allow-presentation"
               allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
               allowFullScreen
               referrerPolicy="no-referrer"
@@ -227,6 +248,12 @@ function PlayerInner({ titleId, titleName, entries: ordered, initialSourceId, se
               } ${s.state !== "enabled" ? "cursor-not-allowed opacity-40 hover:text-white/75" : ""}`}
             >
               {s.label}
+              {s.latencyMs !== undefined && s.state === "enabled" && (
+                <span className="ml-1.5 text-xs opacity-60">
+                  {i === ordered.findIndex((e) => e.latencyMs !== undefined && e.state === "enabled") ? "Fastest · " : ""}
+                  {s.latencyMs} ms
+                </span>
+              )}
               {s.state !== "enabled" && <span className="ml-1.5 text-xs">· {s.state === "unconfigured" ? "not configured" : "disabled"}</span>}
             </button>
           ))}

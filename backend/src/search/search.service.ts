@@ -10,6 +10,7 @@ interface Doc {
   overview: string;
   genres: string[];
   year: number | null;
+  type: string;
 }
 
 /** Meilisearch-backed search; falls back to Postgres ILIKE when Meilisearch is unconfigured or down. */
@@ -36,7 +37,7 @@ export class SearchService implements OnApplicationBootstrap {
     const index = this.client.index<Doc>("titles");
     await index.updateSettings({
       searchableAttributes: ["name", "genres", "overview"],
-      filterableAttributes: ["genres", "year"],
+      filterableAttributes: ["genres", "year", "type"],
     }).waitTask();
     const rows = await this.prisma.title.findMany({ where: { published: true } });
     await index.addDocuments(rows.map(toDoc)).waitTask();
@@ -56,28 +57,34 @@ export class SearchService implements OnApplicationBootstrap {
     }
   }
 
-  async search(q: string) {
+  async search(q: string, o: { type?: "MOVIE" | "SERIES"; genre?: string; page: number; limit: number }) {
     if (this.client) {
       try {
-        const res = await this.client.index<Doc>("titles").search(q, { limit: 20 });
+        const filter = [o.type && `type = "${o.type}"`, o.genre && `genres = "${o.genre.replace(/"/g, "")}"`].filter(Boolean) as string[];
+        const res = await this.client.index<Doc>("titles").search(q, {
+          offset: (o.page - 1) * o.limit,
+          limit: o.limit,
+          ...(filter.length && { filter }),
+        });
         const ids = res.hits.map((h) => h.id);
         const order = new Map(ids.map((id, i) => [id, i]));
         const found = await this.titles.getMany(ids);
         found.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
-        return { items: found, total: res.estimatedTotalHits ?? found.length, page: 1, limit: 20 };
+        return { items: found, total: res.estimatedTotalHits ?? found.length, page: o.page, limit: o.limit };
       } catch (e) {
         this.log.warn(`meili search failed, using Postgres: ${(e as Error).message}`);
       }
     }
-    return this.titles.list({ q, page: 1, limit: 20 });
+    return this.titles.list({ q, type: o.type, genre: o.genre, page: o.page, limit: o.limit });
   }
 }
 
-const toDoc = (t: { id: string; slug: string; name: string; overview: string | null; genres: string[]; year: number | null }): Doc => ({
+const toDoc = (t: { type: string; id: string; slug: string; name: string; overview: string | null; genres: string[]; year: number | null }): Doc => ({
   id: t.id,
   slug: t.slug,
   name: t.name,
   overview: t.overview ?? "",
   genres: t.genres,
   year: t.year,
+  type: t.type,
 });

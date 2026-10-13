@@ -5,6 +5,7 @@ import { RedisService } from "../common/redis.service";
 
 export interface ListQuery {
   genre?: string;
+  type?: "MOVIE" | "SERIES";
   year?: number;
   q?: string;
   sort?: "newest" | "name" | "year";
@@ -38,6 +39,7 @@ export class TitlesService {
     const where: Prisma.TitleWhereInput = {
       published: true,
       ...(q.genre && { genres: { has: q.genre } }),
+      ...(q.type && { type: q.type }),
       ...(q.year && { year: q.year }),
       ...(q.q && { OR: [{ name: { contains: q.q, mode: "insensitive" } }, { overview: { contains: q.q, mode: "insensitive" } }] }),
     };
@@ -48,6 +50,14 @@ export class TitlesService {
       this.prisma.title.count({ where }),
     ]);
     return { items: (await this.hideDisabledEmbeds(items)).map(toPublicTitle), total, page: q.page, limit: q.limit };
+  }
+
+  /** Distinct genres across published titles, alphabetical. */
+  genres() {
+    return this.redis.cached("titles:genres", 300, async () => {
+      const rows = await this.prisma.title.findMany({ where: { published: true }, select: { genres: true } });
+      return [...new Set(rows.flatMap((r) => r.genres))].sort();
+    });
   }
 
   get(idOrSlug: string) {

@@ -37,3 +37,10 @@ test("source switching: remembered label wins unless unplayable", () => {
   assert.equal(initialIndex(e, "provider:p1", "P0"), 1);
   assert.equal(nextPlayable(e, 0), 1);
 });
+
+test("probed providers are ordered fastest first; unprobed keep registry order after them", () => {
+  const ps = [0, 1, 2, 3].map((n) => mk(n, { state: "enabled", types: ["movie"] }));
+  const e = buildEntries([], ps, "MOVIE", { p2: 80, p1: 300 });
+  assert.deepEqual(e.map((x) => x.label), ["P2", "P1", "P0", "P3"]);
+  assert.equal(initialIndex(e), 0);
+});

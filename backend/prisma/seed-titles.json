@@ -1,0 +1,143 @@
+[
+ {
+  "slug": "big-buck-bunny",
+  "type": "MOVIE",
+  "name": "Big Buck Bunny",
+  "overview": "A giant rabbit with a heart bigger than himself takes on three bullying rodents in this Blender Foundation short, released under Creative Commons.",
+  "year": 2008,
+  "runtimeMin": 10,
+  "genres": [
+   "Animation",
+   "Comedy",
+   "Family"
+  ],
+  "rating": "G",
+  "posterPath": "/posters/big-buck-bunny.jpg",
+  "backdropPath": "/backdrops/big-buck-bunny.jpg",
+  "posterCredit": "Poster: Blender Foundation / Peach Open Movie Project, CC BY 3.0",
+  "backdropCredit": "Still: Big Buck Bunny © Blender Foundation, CC BY 3.0",
+  "accent": [
+   "#2f6b3a",
+   "#0b1f10"
+  ],
+  "sourceLabel": "Cineora HD",
+  "stream": "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8"
+ },
+ {
+  "slug": "sintel",
+  "type": "MOVIE",
+  "name": "Sintel",
+  "overview": "A lonely young woman searches the world for the baby dragon she befriended, in this Blender Foundation short film (CC BY).",
+  "year": 2010,
+  "runtimeMin": 15,
+  "genres": [
+   "Animation",
+   "Fantasy",
+   "Adventure"
+  ],
+  "rating": "PG",
+  "posterPath": "/posters/sintel.jpg",
+  "backdropPath": "/backdrops/sintel-dragon.jpg",
+  "posterCredit": "Poster: Blender Foundation / Durian Open Movie Project, CC BY 3.0",
+  "backdropCredit": "Still: Sintel © Blender Foundation, CC BY 3.0",
+  "accent": [
+   "#7a3b2e",
+   "#1c0d0a"
+  ],
+  "sourceLabel": "Cineora HD",
+  "stream": "https://archive.org/download/Sintel/sintel-2048-stereo_512kb.mp4"
+ },
+ {
+  "slug": "tears-of-steel",
+  "type": "MOVIE",
+  "name": "Tears of Steel",
+  "overview": "In a dystopian future, a group of warriors and scientists try to save the world from destructive robots. A Blender Foundation film (CC BY).",
+  "year": 2012,
+  "runtimeMin": 12,
+  "genres": [
+   "Sci-Fi",
+   "Action"
+  ],
+  "rating": "PG-13",
+  "posterPath": "/posters/tears-of-steel.jpg",
+  "backdropPath": "/backdrops/tears-of-steel.jpg",
+  "posterCredit": "Poster: Blender Foundation / Mango Open Movie Project, CC BY 3.0",
+  "backdropCredit": "Still: Tears of Steel © Blender Foundation, CC BY 3.0",
+  "accent": [
+   "#2c4a7a",
+   "#0a1220"
+  ],
+  "sourceLabel": "Cineora HD",
+  "stream": "https://demo.unified-streaming.com/k8s/features/stable/video/tears-of-steel/tears-of-steel.ism/.m3u8"
+ },
+ {
+  "slug": "elephants-dream",
+  "type": "MOVIE",
+  "name": "Elephants Dream",
+  "overview": "Two strange characters explore a capricious and seemingly infinite machine. The first open movie from the Blender Foundation (CC BY).",
+  "year": 2006,
+  "runtimeMin": 11,
+  "genres": [
+   "Animation",
+   "Sci-Fi"
+  ],
+  "rating": "PG",
+  "posterPath": "/posters/elephants-dream.jpg",
+  "backdropPath": "/backdrops/elephants-dream.jpg",
+  "posterCredit": "Poster: Blender Foundation / Orange Open Movie Project, CC BY 4.0",
+  "backdropCredit": "Still: Elephants Dream © Blender Foundation, CC BY 2.5",
+  "accent": [
+   "#6b4c2a",
+   "#1a1108"
+  ],
+  "sourceLabel": "Cineora HD",
+  "stream": "https://archive.org/download/ElephantsDream/ed_1024_512kb.mp4"
+ },
+ {
+  "slug": "night-of-the-living-dead",
+  "type": "MOVIE",
+  "name": "Night of the Living Dead",
+  "overview": "A group of strangers barricade themselves in a farmhouse as the dead rise. George A. Romero's 1968 classic is in the public domain.",
+  "year": 1968,
+  "runtimeMin": 96,
+  "genres": [
+   "Horror",
+   "Classic"
+  ],
+  "rating": "NR",
+  "posterPath": "/posters/night-of-the-living-dead.jpg",
+  "backdropPath": "/backdrops/night-of-the-living-dead.jpg",
+  "posterCredit": "Poster: public domain (via Wikimedia Commons)",
+  "backdropCredit": "Still: public domain (via Wikimedia Commons)",
+  "accent": [
+   "#444444",
+   "#0c0c0c"
+  ],
+  "sourceLabel": "Internet Archive",
+  "stream": "https://archive.org/download/Night_of_the_Living_Dead_AVI/MoviePowderPresentsTheNightOfTheLivingDead_512kb.mp4"
+ },
+ {
+  "slug": "a-trip-to-the-moon",
+  "type": "MOVIE",
+  "name": "A Trip to the Moon",
+  "overview": "Georges Méliès' landmark 1902 silent film, in which astronomers travel to the Moon in a capsule fired from a cannon.",
+  "year": 1902,
+  "runtimeMin": 14,
+  "genres": [
+   "Sci-Fi",
+   "Classic",
+   "Fantasy"
+  ],
+  "rating": "NR",
+  "posterPath": "/posters/a-trip-to-the-moon.jpg",
+  "backdropPath": "/backdrops/a-trip-to-the-moon.jpg",
+  "posterCredit": "Poster: public domain (via Wikimedia Commons)",
+  "backdropCredit": "Still: public domain (via Wikimedia Commons)",
+  "accent": [
+   "#5b4a7a",
+   "#14101c"
+  ],
+  "sourceLabel": "Internet Archive",
+  "stream": "https://archive.org/download/le-voyage-dans-la-lune-1902-georges-melies/Le%20Voyage%20Dans%20La%20Lune%20-%20(1902)%20-%20Georges%20M%C3%A9li%C3%A8s.mp4"
+ }
+]

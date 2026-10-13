@@ -1,0 +1,1 @@
+{ "sourceRoot": "src", "compilerOptions": { "builder": "swc", "typeCheck": true } }

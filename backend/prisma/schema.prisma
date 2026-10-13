@@ -1,0 +1,138 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+enum TitleType {
+  MOVIE
+  SERIES
+}
+enum SourceKind {
+  HLS_OWNED
+  PUBLIC_DOMAIN
+  YOUTUBE_OFFICIAL
+  WATCH_LINK
+  EMBED_PROVIDER
+}
+enum SourceStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String?
+  name         String?
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now())
+  watchlist    WatchlistItem[]
+  history      WatchHistory[]
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model Title {
+  id           String    @id @default(cuid())
+  slug         String    @unique
+  tmdbId       Int?      @unique
+  type         TitleType
+  name         String
+  overview     String?
+  year         Int?
+  runtimeMin   Int?
+  rating       String?
+  posterPath   String?
+  backdropPath String?
+  posterCredit String?
+  backdropCredit String?
+  accent       String[]
+  releaseDate  DateTime?
+  genres       String[]
+  published    Boolean   @default(false)
+  createdAt    DateTime  @default(now())
+  sources      Source[]
+  episodes     Episode[]
+  watchlist    WatchlistItem[]
+  history      WatchHistory[]
+  @@index([published, createdAt])
+}
+
+model Episode {
+  id      String  @id @default(cuid())
+  titleId String
+  season  Int
+  number  Int
+  name    String?
+  title   Title   @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  sources Source[]
+  @@unique([titleId, season, number])
+}
+
+model Source {
+  id          String       @id @default(cuid())
+  titleId     String?
+  episodeId   String?
+  kind        SourceKind
+  label       String
+  priority    Int          @default(0)
+  manifestKey String?
+  externalUrl String?
+  status      SourceStatus @default(READY)
+  title       Title?       @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  episode     Episode?     @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  @@index([titleId])
+  @@index([episodeId])
+}
+
+model EmbedProvider {
+  id                 String  @id @default(cuid())
+  slug               String  @unique
+  label              String
+  urlTemplate        String
+  episodeUrlTemplate String?
+  licenseRef         String
+  enabled            Boolean @default(false)
+  priority           Int     @default(0)
+}
+
+model WatchlistItem {
+  userId  String
+  titleId String
+  addedAt DateTime @default(now())
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title   Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@id([userId, titleId])
+}
+
+model WatchHistory {
+  id          String   @id @default(cuid())
+  userId      String
+  titleId     String
+  episodeId   String   @default("")
+  positionSec Int
+  durationSec Int
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@unique([userId, titleId, episodeId])
+}

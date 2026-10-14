@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma.service";
 import { RedisService } from "../common/redis.service";
 import { HAS_POSTER, TitlesService, toPublicTitle } from "./titles.service";
+import { affinityScore, buildAffinity, matchPercent, quality } from "./affinity";
 
 const POOL = 300; // candidates ranked per row
 const ROW_SIZE = 20;
@@ -19,7 +20,7 @@ const LANGUAGE_ROWS = 4;
 const KIDS_GENRES = ["Family", "Animation", "Kids"];
 const MATURE_GENRES = ["Horror", "Crime", "War", "Thriller"];
 const MATURE_RATINGS = ["R", "NC-17", "TV-MA", "PG-13", "TV-14", "18+", "A"];
-const KIDS_WHERE: Prisma.TitleWhereInput = {
+export const KIDS_WHERE: Prisma.TitleWhereInput = {
   genres: { hasSome: KIDS_GENRES },
   NOT: [{ genres: { hasSome: MATURE_GENRES } }, { rating: { in: MATURE_RATINGS } }],
 };
@@ -27,6 +28,7 @@ export const isKidsSafe = (t: { genres: string[]; rating: string | null }) =>
   t.genres.some((g) => KIDS_GENRES.includes(g)) && !t.genres.some((g) => MATURE_GENRES.includes(g)) && !MATURE_RATINGS.includes(t.rating ?? "");
 
 type Row = { key: string; title: string; items: ReturnType<typeof toPublicTitle>[] };
+const TOP_N = 10;
 type Candidate = Prisma.TitleGetPayload<{ include: { sources: true } }>;
 
 /** Builds the home page: shared rows for everyone, plus per-user rows from watch history and My List. */
@@ -44,7 +46,7 @@ export class HomeService {
 
   private async build(kids: boolean) {
     const pool = (extra: Prisma.TitleWhereInput, take?: number) => this.pool(extra, take, kids);
-    const [{ scores: activity, confidence }, genres, languages] = await Promise.all([this.activity(), this.topGenres(), this.topLanguages()]);
+    const [{ scores: activity, confidence }, genres, languages, today] = await Promise.all([this.activity(), this.topGenres(), this.topLanguages(), this.todayScores()]);
 
     // One ranked pool per row, fetched in parallel; rows then claim titles in order so nothing repeats.
     const [trending, playable, series, movies, ...rest] = await Promise.all([
@@ -81,7 +83,10 @@ export class HomeService {
       return { key, title, items: picked as unknown as Row["items"] };
     };
 
+    // Top 10 is not part of the de-dupe: it is a ranking, so its titles may repeat in the rows below.
+    const top = rankTop(trending, today).slice(0, TOP_N);
     const raw = [
+      ...(top.length >= TOP_N ? [{ key: "top10", title: "Top 10 today", items: top as unknown as Row["items"] }] : []),
       claim("trending", "Trending now", trending, 0.8),
       claim("playable", "Watch on Cineora", playable),
       claim("series", "Popular series", series),
@@ -169,16 +174,8 @@ export class HomeService {
       });
     }
 
-    // Interaction profile: what the user has touched, newest first (history outranks the list).
-    // Thumbs up is the strongest signal; thumbs down removes a title from seeds and pushes its genres away.
-    const disliked = new Set(ratings.filter((r) => r.value < 0).map((r) => r.titleId));
-    const liked = new Set(ratings.filter((r) => r.value > 0).map((r) => r.titleId));
-    const touched = new Map<string, { t: Candidate; w: number }>();
-    for (const r of ratings) if (r.value > 0) touched.set(r.titleId, { t: r.title, w: 3 });
-    for (const h of history) if (!touched.has(h.titleId) && !disliked.has(h.titleId)) touched.set(h.titleId, { t: h.title, w: 2 });
-    for (const w of saved) if (!touched.has(w.titleId) && !disliked.has(w.titleId)) touched.set(w.titleId, { t: w.title, w: 1.5 });
-    const dislikedGenres = new Set<string>();
-    for (const r of ratings) if (r.value < 0) for (const g of r.title.genres) dislikedGenres.add(g);
+    const aff = buildAffinity(ratings, history, saved);
+    const { touched, liked, disliked } = aff;
     if (touched.size === 0) return { rows };
 
     // "Because you watched …": reuse the title-to-title ranker for the two most recent seeds.
@@ -193,31 +190,37 @@ export class HomeService {
     });
 
     // Picked for you: genre/language affinity from the whole profile.
-    const genreW = new Map<string, number>();
-    const langW = new Map<string, number>();
-    for (const { t, w } of touched.values()) {
-      for (const g of t.genres) genreW.set(g, (genreW.get(g) ?? 0) + w / Math.sqrt(t.genres.length));
-      if (t.language) langW.set(t.language, (langW.get(t.language) ?? 0) + w);
-    }
-    const topGenres = [...genreW.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([g]) => g);
+    const topGenres = [...aff.genreW.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([g]) => g);
     if (topGenres.length) {
-      const maxG = Math.max(...genreW.values());
-      const maxL = Math.max(1, ...langW.values());
       const pool = await this.pool({ genres: { hasSome: topGenres }, id: { notIn: [...touched.keys(), ...disliked] } }, POOL, profile.isKids);
       const scored = pool
         .filter((t) => !shownIds.has(t.id))
-        .map((t) => {
-          const g = t.genres.reduce((a, x) => a + (genreW.get(x) ?? 0), 0) / (maxG * Math.max(1, t.genres.length) ** 0.5 * 2);
-          const l = t.language ? (langW.get(t.language) ?? 0) / maxL : 0;
-          const penalty = t.genres.some((x) => dislikedGenres.has(x)) ? 0.15 : 0;
-          return { t, s: 0.55 * Math.min(1, g) + 0.2 * l + 0.25 * quality(t) - penalty };
-        })
+        .map((t) => ({ t, s: affinityScore(aff, t) }))
         .sort((a, b) => b.s - a.s)
         .slice(0, ROW_SIZE)
         .map((x) => x.t);
       if (scored.length >= MIN_ROW) rows.push({ key: "picked", title: "Picked for you", items: await present(scored) });
     }
     return { rows };
+  }
+
+  /** "NN% match" per title slug/id for the active profile. Titles with no number (no taste data, disliked) are omitted. */
+  async match(userId: string, profileId: string, idsOrSlugs: string[]): Promise<Record<string, number>> {
+    const [history, saved, ratings, wanted] = await Promise.all([
+      this.prisma.watchHistory.findMany({ where: { userId, profileId, title: { published: true } }, orderBy: { updatedAt: "desc" }, take: 60, include: { title: { include: { sources: true } } } }),
+      this.prisma.watchlistItem.findMany({ where: { userId, profileId, title: { published: true } }, orderBy: { addedAt: "desc" }, take: 200, include: { title: { include: { sources: true } } } }),
+      this.prisma.rating.findMany({ where: { userId, profileId, title: { published: true } }, orderBy: { updatedAt: "desc" }, take: 200, include: { title: { include: { sources: true } } } }),
+      this.prisma.title.findMany({ where: { published: true, OR: [{ id: { in: idsOrSlugs } }, { slug: { in: idsOrSlugs } }] }, include: { sources: true } }),
+    ]);
+    const aff = buildAffinity(ratings, history, saved);
+    const out: Record<string, number> = {};
+    for (const t of wanted) {
+      const pct = matchPercent(aff, t);
+      if (pct === null) continue;
+      out[t.slug] = pct;
+      out[t.id] = pct;
+    }
+    return out;
   }
 
   /** Candidate titles: has a poster, already released, most popular first. */
@@ -255,6 +258,35 @@ export class HomeService {
       scores: new Map([...raw].map(([id, v]) => [id, Math.log1p(v) / Math.log1p(max)])),
       confidence: Math.min(1, events / FULL_CONFIDENCE_EVENTS),
     };
+  }
+
+  /**
+   * Last-24h behavior per title (raw weighted counts, not normalised): watching 3, saving 2, page views 1.
+   * Today's view bucket counts in full, yesterday's at half, so the ranking moves through the day.
+   */
+  private async todayScores() {
+    const since = new Date(Date.now() - 86_400_000);
+    const [saves, watches, views] = await Promise.all([
+      this.prisma.watchlistItem.groupBy({ by: ["titleId"], where: { addedAt: { gte: since } }, _count: { _all: true } }),
+      this.prisma.watchHistory.groupBy({ by: ["titleId"], where: { updatedAt: { gte: since } }, _count: { _all: true } }),
+      this.dayViews(),
+    ]);
+    const out = new Map<string, number>(views);
+    for (const r of saves) out.set(r.titleId, (out.get(r.titleId) ?? 0) + 2 * r._count._all);
+    for (const r of watches) out.set(r.titleId, (out.get(r.titleId) ?? 0) + 3 * r._count._all);
+    return out;
+  }
+
+  private async dayViews() {
+    const out = new Map<string, number>();
+    const client = this.redis.client;
+    if (!client) return out;
+    try {
+      const [today, yesterday] = await Promise.all([new Date(), new Date(Date.now() - 86_400_000)].map((d) => client.hgetall(`views:${day(d)}`)));
+      for (const [id, n] of Object.entries(today)) out.set(id, Number(n));
+      for (const [id, n] of Object.entries(yesterday)) out.set(id, (out.get(id) ?? 0) + Number(n) / 2);
+    } catch {}
+    return out;
   }
 
   /** Anonymous page views: one count per visitor per title per 30 minutes, stored in daily Redis hashes. */
@@ -307,17 +339,14 @@ export class HomeService {
 }
 
 /**
- * 0..1 base score: TMDB popularity/votes (log-scaled) lead, then recency, artwork, overview and playability.
- * Behavior (watchlist/watch activity) is added on top by the caller.
+ * Orders candidates by today's activity first; titles nobody touched today fall back to their base quality,
+ * so a quiet day still yields a full, sensible Top 10. Exported for tests.
  */
-function quality(t: Candidate): number {
-  const ageYears = t.releaseDate ? Math.max(0, (Date.now() - t.releaseDate.getTime()) / 3.156e10) : 20;
-  const recency = Math.exp(-ageYears / 15);
-  const pop = Math.min(1, Math.log1p(t.popularity) / Math.log1p(300));
-  const votes = Math.min(1, Math.log1p(t.voteCount) / Math.log1p(5000));
-  return (
-    0.3 * pop + 0.2 * votes + 0.2 * recency + 0.1 * (t.backdropPath ? 1 : 0) + 0.1 * ((t.overview?.length ?? 0) > 40 ? 1 : 0) + 0.1 * (t.sources.length > 0 ? 1 : 0)
-  );
+export function rankTop<T extends Candidate>(pool: T[], today: Map<string, number>): T[] {
+  return pool
+    .map((t) => ({ t, active: today.get(t.id) ?? 0, q: quality(t) }))
+    .sort((a, b) => (b.active > 0 ? 1 : 0) - (a.active > 0 ? 1 : 0) || b.active - a.active || b.q - a.q)
+    .map((x) => x.t);
 }
 
 const names = new Intl.DisplayNames(["en"], { type: "language" });

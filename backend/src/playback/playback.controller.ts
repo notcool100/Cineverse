@@ -15,6 +15,12 @@ class EmbedTokenDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(99999) episode?: number;
 }
 
+class AvailabilityDto {
+  @IsString() titleId: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(9999) season?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(99999) episode?: number;
+}
+
 @Controller("playback")
 @UseGuards(AuthGuard)
 export class PlaybackController {
@@ -22,6 +28,10 @@ export class PlaybackController {
 
   @Get("providers") providers() {
     return this.playback.providers();
+  }
+
+  @Post("availability") @HttpCode(200) availability(@Body() dto: AvailabilityDto) {
+    return this.playback.unavailableProviders(dto.titleId, dto.season, dto.episode);
   }
 
   @Post("embed-token") @HttpCode(200) embedToken(@Body() dto: EmbedTokenDto) {

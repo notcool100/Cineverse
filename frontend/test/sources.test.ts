@@ -44,3 +44,11 @@ test("probed providers are ordered fastest first; unprobed keep registry order a
   assert.deepEqual(e.map((x) => x.label), ["P2", "P1", "P0", "P3"]);
   assert.equal(initialIndex(e), 0);
 });
+
+test("servers offering the preferred audio language come first, order kept within each group", () => {
+  const ps = [mk(0, { languages: ["en"] }), mk(1, { languages: ["hi", "en"] }), mk(2), mk(3, { languages: ["hi"] })];
+  const labels = (lang: string) => buildEntries([], ps, "MOVIE", {}, lang).map((e) => e.label).slice(0, 4);
+  assert.deepEqual(labels("hi"), ["P1", "P3", "P0", "P2"]);
+  assert.deepEqual(labels(""), ["P0", "P1", "P2", "P3"]);
+  assert.deepEqual(labels("fr"), ["P0", "P1", "P2", "P3"]);
+});

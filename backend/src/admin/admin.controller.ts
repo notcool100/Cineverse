@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Req, UseGuards, Logger } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, NotFoundException, Param, Patch, Post, Put, Query, Req, UseGuards, Logger } from "@nestjs/common";
 import { Type } from "class-transformer";
 import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsEnum, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength } from "class-validator";
 import { PartialType } from "@nestjs/swagger";
@@ -13,6 +13,9 @@ import * as argon2 from "argon2";
 import { Prisma } from "@prisma/client";
 import { loadDbHosts } from "../playback/embed-hosts";
 import { envEmbedHosts, isValidHost, validateTemplate } from "../playback/embed-template";
+import { validateMarkers } from "./markers";
+import { AnalyticsService } from "./analytics.service";
+import { NotificationsService } from "../notifications/notifications.service";
 
 class CreateTitleDto {
   @Matches(/^[a-z0-9]+(-[a-z0-9]+)*$/) @MaxLength(100) slug: string;
@@ -67,6 +70,21 @@ class AdminUserDto {
   @IsString() @MinLength(12) @MaxLength(200) password: string;
 }
 
+/** Playback markers; `null` clears a value, an omitted field is left unchanged. */
+class MarkersDto {
+  @IsOptional() @IsInt() @Min(0) introStartSec?: number | null;
+  @IsOptional() @IsInt() @Min(0) introEndSec?: number | null;
+  @IsOptional() @IsInt() @Min(0) creditsStartSec?: number | null;
+}
+
+class EpisodeDto {
+  @IsInt() @Min(0) season: number;
+  @IsInt() @Min(1) number: number;
+  @IsOptional() @IsString() @MaxLength(200) name?: string;
+  @IsOptional() @IsString() @MaxLength(5000) overview?: string;
+  @IsOptional() @IsInt() @Min(0) runtimeMin?: number;
+}
+
 class ImportTmdbDto {
   @IsInt() tmdbId: number;
   @IsEnum(TitleType) type: TitleType;
@@ -82,6 +100,8 @@ export class AdminController {
     private readonly titles: TitlesService,
     private readonly search: SearchService,
     private readonly redis: RedisService,
+    private readonly notifications: NotificationsService,
+    private readonly analytics: AnalyticsService,
   ) {}
 
   /** Keep the cache and search index consistent after a write. */
@@ -92,6 +112,12 @@ export class AdminController {
 
   private audit(req: AuthedRequest, action: string, target: string) {
     this.log.log(`${req.user.id} ${action} ${target}`);
+  }
+
+  /** Dashboard numbers: totals, per-day views/watches/signups, top titles, flagged sources. `days` 7–60. */
+  @Get("analytics") overview(@Query("days") days?: string) {
+    const n = Math.min(60, Math.max(7, Number.parseInt(days ?? "14", 10) || 14));
+    return this.analytics.overview(n);
   }
 
   @Get("titles") listTitles() {
@@ -132,9 +158,12 @@ export class AdminController {
     }
     if (dto.kind === "YOUTUBE_OFFICIAL" && !/^[\w-]{11}$/.test(dto.externalUrl ?? ""))
       throw new BadRequestException("externalUrl must be an 11-char YouTube video id");
+    const title = await this.prisma.title.findUnique({ where: { id: titleId }, select: { name: true, published: true, _count: { select: { sources: { where: { status: "READY" } } } } } });
     const s = await this.prisma.source.create({ data: { ...dto, titleId } });
     await this.refresh();
     this.audit(req, "source.create", s.id);
+    // Only the first playable source is news: "it's now available" for people who saved or are waiting on it.
+    if (title?.published && title._count.sources === 0) await this.notifications.notifyWatchers(titleId, "SOURCE_ADDED", `${title.name} is now available to watch`);
     return s;
   }
 
@@ -144,6 +173,68 @@ export class AdminController {
     });
     await this.refresh();
     this.audit(req, "source.delete", id);
+  }
+
+  /** Episodes of a series with their playback markers, for the marker editor. */
+  @Get("titles/:id/episodes") episodes(@Param("id") id: string) {
+    return this.prisma.episode.findMany({
+      where: { titleId: id },
+      orderBy: [{ season: "asc" }, { number: "asc" }],
+      select: { id: true, season: true, number: true, name: true, runtimeMin: true, introStartSec: true, introEndSec: true, creditsStartSec: true },
+    });
+  }
+
+  @Patch("episodes/:id/markers") async setEpisodeMarkers(@Req() req: AuthedRequest, @Param("id") id: string, @Body() dto: MarkersDto) {
+    const cur = await this.prisma.episode.findUnique({ where: { id } });
+    if (!cur) throw new NotFoundException();
+    const merged = {
+      introStartSec: dto.introStartSec === undefined ? cur.introStartSec : dto.introStartSec,
+      introEndSec: dto.introEndSec === undefined ? cur.introEndSec : dto.introEndSec,
+      creditsStartSec: dto.creditsStartSec === undefined ? cur.creditsStartSec : dto.creditsStartSec,
+    };
+    const err = validateMarkers(merged, cur.runtimeMin ? cur.runtimeMin * 60 : null);
+    if (err) throw new BadRequestException(err);
+    const ep = await this.prisma.episode.update({ where: { id }, data: merged });
+    await this.titles.invalidate();
+    this.audit(req, "episode.markers", id);
+    return ep;
+  }
+
+  /** Applies the same markers to every episode of a season (typical for a show with a fixed-length intro). */
+  @Put("titles/:id/seasons/:season/markers") async setSeasonMarkers(
+    @Req() req: AuthedRequest,
+    @Param("id") id: string,
+    @Param("season") season: string,
+    @Body() dto: MarkersDto,
+  ) {
+    const n = Number(season);
+    if (!Number.isInteger(n) || n < 0) throw new NotFoundException();
+    const data = {
+      introStartSec: dto.introStartSec ?? null,
+      introEndSec: dto.introEndSec ?? null,
+      creditsStartSec: dto.creditsStartSec ?? null,
+    };
+    const err = validateMarkers(data);
+    if (err) throw new BadRequestException(err);
+    const { count } = await this.prisma.episode.updateMany({ where: { titleId: id, season: n }, data });
+    await this.titles.invalidate();
+    this.audit(req, "season.markers", `${id}:${n}`);
+    return { updated: count };
+  }
+
+  /** Adds (or updates) one episode of a series and tells the people who saved the series. */
+  @Post("titles/:id/episodes") async addEpisode(@Req() req: AuthedRequest, @Param("id") titleId: string, @Body() dto: EpisodeDto) {
+    const title = await this.prisma.title.findUnique({ where: { id: titleId }, select: { name: true, type: true, published: true } });
+    if (!title || title.type !== "SERIES") throw new NotFoundException();
+    const where = { titleId_season_number: { titleId, season: dto.season, number: dto.number } };
+    const existed = !!(await this.prisma.episode.findUnique({ where }));
+    const data = { name: dto.name, overview: dto.overview, runtimeMin: dto.runtimeMin };
+    const ep = await this.prisma.episode.upsert({ where, create: { titleId, season: dto.season, number: dto.number, ...data }, update: data });
+    await this.titles.invalidate();
+    this.audit(req, "episode.add", ep.id);
+    if (!existed && title.published)
+      await this.notifications.notifyWatchers(titleId, "EPISODE_ADDED", `${title.name}: new episode S${dto.season}·E${dto.number}${dto.name ? ` “${dto.name}”` : ""}`);
+    return ep;
   }
 
   @Get("embed-providers") providers() {

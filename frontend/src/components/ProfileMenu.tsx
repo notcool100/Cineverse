@@ -43,6 +43,18 @@ export function ProfileMenu({ profile }: { profile: Profile }) {
           <Link role="menuitem" href="/profiles?manage=1" onClick={() => setOpen(false)} className="block rounded-xl px-3 py-2 hover:bg-white/10">
             Manage profiles
           </Link>
+          <Link role="menuitem" href="/activity" onClick={() => setOpen(false)} className="block rounded-xl px-3 py-2 hover:bg-white/10">
+            Viewing activity
+          </Link>
+          <Link role="menuitem" href="/lists" onClick={() => setOpen(false)} className="block rounded-xl px-3 py-2 hover:bg-white/10">
+            My lists
+          </Link>
+          <Link role="menuitem" href="/collections" onClick={() => setOpen(false)} className="block rounded-xl px-3 py-2 hover:bg-white/10">
+            Collections
+          </Link>
+          <Link role="menuitem" href="/requests" onClick={() => setOpen(false)} className="block rounded-xl px-3 py-2 hover:bg-white/10">
+            Request a title
+          </Link>
         </div>
       )}
     </div>

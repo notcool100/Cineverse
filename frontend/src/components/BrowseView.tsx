@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { browseTitles, getGenres, getLanguages, type BrowseQuery } from "@/lib/catalog";
+import { browseTitles, getGenres, getLanguages, getRatings, type BrowseQuery } from "@/lib/catalog";
 import type { TitleType } from "@/lib/types";
 import { EmptyState } from "./EmptyState";
 import { Pagination } from "./Pagination";
@@ -12,6 +12,14 @@ const SORTS = [
   { value: "newest", label: "Recently added" },
   { value: "year", label: "Release year" },
   { value: "name", label: "A–Z" },
+] as const;
+/** Release-year buckets; `from`/`to` are inclusive years. */
+const DECADES = [
+  { value: "2020", label: "2020s", from: 2020, to: 2100 },
+  { value: "2010", label: "2010s", from: 2010, to: 2019 },
+  { value: "2000", label: "2000s", from: 2000, to: 2009 },
+  { value: "1990", label: "1990s", from: 1990, to: 1999 },
+  { value: "older", label: "Before 1990", from: 1888, to: 1989 },
 ] as const;
 const TYPES: { value: TitleType | undefined; label: string; path: string }[] = [
   { value: undefined, label: "All", path: "/browse" },
@@ -35,27 +43,33 @@ export async function BrowseView({
   heading,
   type,
   defaultSort = "newest",
+  tabs,
   searchParams,
 }: {
   basePath: string;
   heading: string;
   type?: TitleType;
   defaultSort?: BrowseQuery["sort"];
+  /** Rendered under the heading (e.g. the New / Coming soon tabs). */
+  tabs?: React.ReactNode;
   searchParams: Promise<Params>;
 }) {
   const sp = await searchParams;
   const q = one(sp.q)?.trim().slice(0, 100) || undefined;
   const genre = one(sp.genre) || undefined;
   const language = /^[a-z]{2,3}$/.test(one(sp.language) ?? "") ? one(sp.language) : undefined;
+  const decade = DECADES.find((d) => d.value === one(sp.decade));
+  const rating = /^[\w+\- ]{1,12}$/.test(one(sp.rating) ?? "") ? one(sp.rating) : undefined;
   const sortParam = one(sp.sort);
   const sort = SORTS.find((s) => s.value === sortParam)?.value ?? defaultSort;
   const typeParam = type ?? (one(sp.type) === "MOVIE" || one(sp.type) === "SERIES" ? (one(sp.type) as TitleType) : undefined);
   const page = Math.max(1, Number.parseInt(one(sp.page) ?? "1", 10) || 1);
 
-  const [result, genres, languages] = await Promise.all([
-    browseTitles({ q, type: typeParam, genre, language, sort, page, limit: PAGE_SIZE }),
+  const [result, genres, languages, ratings] = await Promise.all([
+    browseTitles({ q, type: typeParam, genre, language, yearFrom: decade?.from, yearTo: decade?.to, rating, sort, page, limit: PAGE_SIZE }),
     getGenres(),
     getLanguages(),
+    getRatings(),
   ]);
   const totalPages = Math.max(1, Math.ceil(result.total / PAGE_SIZE));
 
@@ -64,6 +78,8 @@ export async function BrowseView({
       q,
       genre,
       language,
+      decade: decade?.value,
+      rating,
       sort: sort === defaultSort ? undefined : sort,
       type: type ? undefined : typeParam,
       page: undefined,
@@ -82,6 +98,7 @@ export async function BrowseView({
         {result.total} {result.total === 1 ? "title" : "titles"}
         {totalPages > 1 && ` · page ${Math.min(page, totalPages)} of ${totalPages}`}
       </p>
+      {tabs}
 
       <div className="flex flex-col gap-8 lg:flex-row">
         <aside className="lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:w-60 lg:shrink-0 lg:self-start lg:overflow-y-auto">
@@ -106,6 +123,20 @@ export async function BrowseView({
                   ))}
                 </FilterGroup>
               )}
+              <FilterGroup title="Release year">
+                <Option href={href({ decade: undefined })} active={!decade}>Any year</Option>
+                {DECADES.map((d) => (
+                  <Option key={d.value} href={href({ decade: d.value })} active={decade?.value === d.value}>{d.label}</Option>
+                ))}
+              </FilterGroup>
+              {ratings.length > 0 && (
+                <FilterGroup title="Rating">
+                  <Option href={href({ rating: undefined })} active={!rating}>Any rating</Option>
+                  {ratings.map((r) => (
+                    <Option key={r} href={href({ rating: r })} active={rating === r}>{r}</Option>
+                  ))}
+                </FilterGroup>
+              )}
               <FilterGroup title="Genre">
                 <Option href={href({ genre: undefined })} active={!genre}>All genres</Option>
                 {genres.map((g) => (
@@ -119,8 +150,8 @@ export async function BrowseView({
                   ))}
                 </FilterGroup>
               )}
-              {(genre || language || (!type && typeParam)) && (
-                <Link href={basePath} className="block text-center text-sm text-white/55 underline hover:text-white">Clear filters</Link>
+              {(genre || language || decade || rating || (!type && typeParam)) && (
+                <Link href={href({ genre: undefined, language: undefined, decade: undefined, rating: undefined, type: undefined })} className="block text-center text-sm text-white/55 underline hover:text-white">Clear filters</Link>
               )}
             </div>
           </details>

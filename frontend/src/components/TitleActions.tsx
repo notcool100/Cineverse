@@ -2,17 +2,17 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { Source, TitleType } from "@/lib/types";
 import { buildEntries, isPlayable, type ProviderInfo } from "@/lib/sources";
-import { getEmbedProviders, getRating, setRating } from "@/lib/client-api";
+import { getEmbedProviders } from "@/lib/client-api";
+import { AddToList } from "./AddToList";
 import { PlayGlyph } from "./Poster";
 import { SourceSwitcher } from "./SourceSwitcher";
 import { useUser } from "./useSession";
+import { useRating } from "./useRating";
 import { useWatchlist } from "./useWatchlist";
 
 export function TitleActions({ titleId, titleName, sources, titleType }: { titleId: string; titleName: string; sources: Source[]; titleType?: TitleType }) {
-  const router = useRouter();
   const user = useUser();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const ordered = buildEntries(sources, providers, titleType);
@@ -37,31 +37,11 @@ export function TitleActions({ titleId, titleName, sources, titleType }: { title
   }, [sourceId]);
   const playable = !!sourceId && isPlayable(ordered.find((e) => e.id === sourceId));
 
-  const [rating, setRatingState] = useState(0);
-  useEffect(() => {
-    if (!user) return;
-    let live = true;
-    getRating(titleId).then((v) => live && setRatingState(v)).catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [user, titleId]);
-
-  async function rate(value: 1 | -1) {
-    if (!user) return router.push(`/login?next=/title/${titleId}`);
-    const was = rating;
-    const next = was === value ? 0 : value;
-    setRatingState(next);
-    try {
-      await setRating(titleId, next);
-    } catch {
-      setRatingState(was);
-    }
-  }
+  const { rating, rate } = useRating(titleId, `/title/${titleId}`);
 
   return (
     <>
-      <div className="rise rise-3 mt-8 flex flex-wrap gap-3">
+      <div className="rise rise-3 relative z-20 mt-8 flex flex-wrap gap-3">
         {playable ? (
           <Link
             ref={playRef}
@@ -81,6 +61,7 @@ export function TitleActions({ titleId, titleName, sources, titleType }: { title
         >
           <span aria-hidden className="text-xl leading-none">{saved ? "✓" : "+"}</span> My List
         </button>
+        <AddToList titleId={titleId} />
         {([1, -1] as const).map((v) => (
           <button
             key={v}

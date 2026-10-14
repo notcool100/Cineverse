@@ -1,10 +1,11 @@
-import { Body, Controller, NotFoundException, Delete, Get, HttpCode, Param, Put, Post, Req, UseGuards } from "@nestjs/common";
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min } from "class-validator";
+import { Body, Controller, NotFoundException, Delete, Get, HttpCode, Param, Put, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, Min } from "class-validator";
 import { AuthGuard, type AuthedRequest } from "../auth/auth.guard";
 import { PrismaService } from "../common/prisma.service";
 import { ProfilesService } from "./profiles.service";
 import { HomeService } from "../titles/home.service";
 import { toPublicTitle } from "../titles/titles.service";
+import { resolvePrefs, sanitizePrefs, SUBTITLE_SIZES } from "./profile-prefs";
 
 class WatchlistAddDto {
   @IsString() titleId: string;
@@ -18,6 +19,15 @@ class HistoryDto {
 
 class SeasonWatchedDto {
   @IsBoolean() watched: boolean;
+}
+
+class PrefsDto {
+  @IsOptional() @IsString() @Matches(/^([a-z]{2,3})?$/) audioLang?: string;
+  @IsOptional() @IsString() @Matches(/^([a-z]{2,3})?$/) subtitleLang?: string;
+  @IsOptional() @IsIn(SUBTITLE_SIZES) subtitleSize?: string;
+  @IsOptional() @IsBoolean() autoplayNext?: boolean;
+  @IsOptional() @IsBoolean() autoplayPreviews?: boolean;
+  @IsOptional() @IsBoolean() autoSkipIntro?: boolean;
 }
 
 class RatingDto {
@@ -37,6 +47,30 @@ export class MeController {
   /** Personalized home rows: continue watching, because-you-watched, picked for you. */
   @Get("home") forYou(@Req() req: AuthedRequest) {
     return this.profiles.resolve(req).then((p) => this.home.forUser(req.user.id, p));
+  }
+
+  /** `?ids=slug1,slug2` (max 40) → `{ slug: 0‑100 }` taste match for the active profile; unscored titles are omitted. */
+  @Get("match") async match(@Req() req: AuthedRequest, @Query("ids") ids = "") {
+    const list = [...new Set(ids.split(",").map((x) => x.trim()).filter(Boolean))].slice(0, 40);
+    if (list.length === 0) return {};
+    const p = await this.profiles.resolve(req);
+    return this.home.match(req.user.id, p.id, list);
+  }
+
+  /** Playback preferences of the active profile (defaults filled in). */
+  @Get("profile-prefs") async prefs(@Req() req: AuthedRequest) {
+    const p = await this.profiles.resolve(req);
+    const row = await this.prisma.profile.findUnique({ where: { id: p.id }, select: { prefs: true } });
+    return resolvePrefs(row?.prefs);
+  }
+
+  /** Partial update: only the fields sent change. */
+  @Put("profile-prefs") async setPrefs(@Req() req: AuthedRequest, @Body() dto: PrefsDto) {
+    const p = await this.profiles.resolve(req);
+    const row = await this.prisma.profile.findUnique({ where: { id: p.id }, select: { prefs: true } });
+    const next = resolvePrefs(row?.prefs, sanitizePrefs(dto));
+    await this.prisma.profile.update({ where: { id: p.id }, data: { prefs: { ...next } } });
+    return next;
   }
 
   @Get("watchlist") async watchlist(@Req() req: AuthedRequest) {
@@ -87,6 +121,49 @@ export class MeController {
       where: { userId_profileId_titleId_episodeId: { userId: req.user.id, profileId: p.id, titleId, episodeId } },
       create: { userId: req.user.id, profileId: p.id, titleId, episodeId, ...data },
       update: marker ? { updatedAt: new Date() } : data,
+    });
+  }
+
+  /**
+   * Viewing activity, newest first, one row per title/episode. Page with `?before=<ISO date of the last row>`.
+   * Rows are lean (no sources) because the page only lists and removes them.
+   */
+  @Get("activity") async activity(@Req() req: AuthedRequest, @Query("before") before?: string, @Query("limit") limit?: string) {
+    const p = await this.profiles.resolve(req);
+    const take = Math.min(100, Math.max(1, Number.parseInt(limit ?? "40", 10) || 40));
+    const cursor = before && !Number.isNaN(Date.parse(before)) ? new Date(before) : undefined;
+    const rows = await this.prisma.watchHistory.findMany({
+      where: { userId: req.user.id, profileId: p.id, title: { published: true }, ...(cursor && { updatedAt: { lt: cursor } }) },
+      orderBy: { updatedAt: "desc" },
+      take: take + 1,
+      include: { title: { select: { slug: true, name: true, type: true, year: true, posterPath: true, accent: true } } },
+    });
+    const page = rows.slice(0, take);
+    return {
+      items: page.map((r) => ({
+        titleId: r.title.slug,
+        episodeId: r.episodeId,
+        positionSec: r.positionSec,
+        durationSec: r.durationSec,
+        updatedAt: r.updatedAt,
+        title: r.title,
+      })),
+      next: rows.length > take ? page[page.length - 1].updatedAt : null,
+    };
+  }
+
+  /** Clears the active profile's whole viewing history. */
+  @Delete("history") @HttpCode(204) async clearHistory(@Req() req: AuthedRequest) {
+    const p = await this.profiles.resolve(req);
+    await this.prisma.watchHistory.deleteMany({ where: { userId: req.user.id, profileId: p.id } });
+  }
+
+  /** Removes a title (every episode, or just `?episodeId=`) from history, which also drops it from Continue watching. */
+  @Delete("history/:titleId") @HttpCode(204) async removeHistory(@Req() req: AuthedRequest, @Param("titleId") titleId: string, @Query("episodeId") episodeId?: string) {
+    const p = await this.profiles.resolve(req);
+    const id = await this.resolveTitleId(titleId);
+    await this.prisma.watchHistory.deleteMany({
+      where: { userId: req.user.id, profileId: p.id, titleId: id, ...(episodeId !== undefined && { episodeId }) },
     });
   }
 

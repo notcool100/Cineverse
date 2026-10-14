@@ -1,5 +1,6 @@
 import "reflect-metadata";
 import { PrismaClient } from "@prisma/client";
+import { notifyWatchers } from "../src/notifications/fanout";
 import { config } from "dotenv";
 
 // Bulk catalog import from TMDB: popular + top-rated movies and TV, upserted by tmdbId.
@@ -105,7 +106,11 @@ async function importKind(kind: "movie" | "tv") {
       const t = await db(() => prisma.title.upsert({ where: { tmdbId: m.id }, create: { ...data, tmdbId: m.id, slug, published: true }, update: data }));
       const eps = (tv?.seasons ?? []).filter((s) => s.season_number > 0).flatMap((s) =>
         Array.from({ length: s.episode_count }, (_, n) => ({ titleId: t.id, season: s.season_number, number: n + 1 })));
-      if (eps.length) await db(() => prisma.episode.createMany({ data: eps, skipDuplicates: true }));
+      if (eps.length) {
+        const added = await db(() => prisma.episode.createMany({ data: eps, skipDuplicates: true }));
+        // Re-imports that bring new episodes tell the people who saved the series (a first import has no watchers yet).
+        if (added.count > 0) await notifyWatchers(prisma, t.id, "EPISODE_ADDED", `${t.name}: ${added.count} new episode${added.count === 1 ? "" : "s"}`);
+      }
       done++;
     }));
     if ((i / 8) % 10 === 0) console.log(`${kind}: ${Math.min(i + 8, items.length)}/${items.length}`);

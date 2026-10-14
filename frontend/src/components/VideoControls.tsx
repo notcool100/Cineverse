@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import type { CastState } from "./useCast";
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const HIDE_MS = 2800;
@@ -54,6 +55,8 @@ const Vol = ({ level }: { level: 0 | 1 | 2 }) => (
 );
 const Server = () => <Svg><rect x="2" y="2" width="20" height="8" rx="2" ry="2" /><rect x="2" y="14" width="20" height="8" rx="2" ry="2" /><line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" /></Svg>;
 const Gear = () => <Svg><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></Svg>;
+const Captions = () => <Svg><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M10 10.5a2.5 2.5 0 1 0 0 3M17 10.5a2.5 2.5 0 1 0 0 3" /></Svg>;
+const CastIcon = () => <Svg><path d="M2 8V6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-6" /><path d="M2 12a9 9 0 0 1 8 8M2 16a5 5 0 0 1 4 4M2 20h.01" /></Svg>;
 const Pip = () => <Svg><path d="M2 7a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-8" /><rect x="2" y="13" width="10" height="8" rx="2" /></Svg>;
 const Maximize = ({ exit }: { exit?: boolean }) => (
   <Svg>
@@ -67,8 +70,23 @@ export interface ControlSource {
   state: "enabled" | "disabled" | "unconfigured";
 }
 
+/** Subtitle and audio choices the stream offers; the controls render a menu when there is something to pick. */
+export interface TrackMenu {
+  subtitles: { id: number; lang: string; label: string }[];
+  /** Selected subtitle track id, or null when subtitles are off. */
+  subtitleId: number | null;
+  audio: { lang: string; label: string }[];
+  audioLang: string;
+}
+
 interface Props {
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** Cast / AirPlay state for this stream; the button only appears when `available`. */
+  cast?: CastState;
+  tracks?: TrackMenu;
+  /** `id` null turns subtitles off. */
+  onSubtitle?: (id: number | null, lang: string) => void;
+  onAudio?: (lang: string) => void;
   sources?: ControlSource[];
   activeSourceId?: string;
   onSelectSource?: (index: number) => void;
@@ -77,14 +95,14 @@ interface Props {
 }
 
 /** Overlay controls for a <video> inside a relatively positioned parent (which is also the full-screen target). */
-export function VideoControls({ videoRef, sources = [], activeSourceId, onSelectSource, previewSrc }: Props) {
+export function VideoControls({ videoRef, sources = [], activeSourceId, onSelectSource, previewSrc, tracks, onSubtitle, onAudio, cast }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [s, setS] = useState({ playing: false, time: 0, duration: 0, buffered: 0, volume: 1, muted: false, rate: 1 });
   const [waiting, setWaiting] = useState(false);
   const [shown, setShown] = useState(true);
   const [fs, setFs] = useState(false);
-  const [menu, setMenu] = useState<null | "settings" | "sources">(null);
+  const [menu, setMenu] = useState<null | "settings" | "sources" | "tracks">(null);
   const [osd, setOsd] = useState<{ text: string; n: number } | null>(null);
   const [scrub, setScrub] = useState<{ x: number; t: number; w: number } | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -312,6 +330,19 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
         )}
       </button>
 
+      {cast?.casting && (
+        <div className="absolute inset-0 z-10 grid place-items-center bg-black/85 text-center">
+          <div>
+            <p className="text-lg font-semibold">Casting to {cast.deviceName}</p>
+            <p className="mt-1 text-sm text-white/60">Playing on your TV. This screen is paused.</p>
+            <div className="mt-5 flex justify-center gap-3">
+              <button type="button" onClick={cast.playPause} className="rounded-full bg-white px-5 py-2 text-sm font-semibold text-black">{cast.remotePaused ? "Play" : "Pause"}</button>
+              <button type="button" onClick={cast.stop} className="glass rounded-full px-5 py-2 text-sm">Stop casting</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {osd && (
         <div key={osd.n} role="status" className="pointer-events-none absolute left-1/2 top-1/3 -translate-x-1/2 rounded-full bg-black/70 px-5 py-2 text-lg font-semibold tabular-nums">
           {osd.text}
@@ -431,6 +462,38 @@ export function VideoControls({ videoRef, sources = [], activeSourceId, onSelect
                 </div>
               )}
             </div>
+            {tracks && (tracks.subtitles.length > 0 || tracks.audio.length > 1) && (
+              <div className="relative">
+                <button type="button" aria-label="Subtitles and audio" aria-expanded={menu === "tracks"} onClick={() => setMenu(menu === "tracks" ? null : "tracks")} className={btn}><Captions /></button>
+                {menu === "tracks" && (
+                  <div role="group" aria-label="Subtitles and audio" className="glass absolute bottom-16 right-0 z-10 max-h-72 w-56 overflow-y-auto rounded-xl p-1">
+                    {tracks.subtitles.length > 0 && (
+                      <>
+                        <p className="px-3 pb-1 pt-2 text-xs uppercase tracking-wider text-white/50">Subtitles</p>
+                        {[{ id: null as number | null, lang: "", label: "Off" }, ...tracks.subtitles].map((t) => (
+                          <button key={t.id ?? "off"} role="menuitemradio" aria-checked={t.id === tracks.subtitleId} onClick={() => { onSubtitle?.(t.id, t.lang); setMenu(null); }} className={`w-full rounded-lg px-3 py-1.5 text-left text-sm hover:bg-white/10 ${t.id === tracks.subtitleId ? "text-accent" : ""}`}>
+                            {t.label}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    {tracks.audio.length > 1 && (
+                      <>
+                        <p className="px-3 pb-1 pt-2 text-xs uppercase tracking-wider text-white/50">Audio</p>
+                        {tracks.audio.map((a) => (
+                          <button key={a.lang} role="menuitemradio" aria-checked={a.lang === tracks.audioLang} onClick={() => { onAudio?.(a.lang); setMenu(null); }} className={`w-full rounded-lg px-3 py-1.5 text-left text-sm hover:bg-white/10 ${a.lang === tracks.audioLang ? "text-accent" : ""}`}>
+                            {a.label}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {cast?.available && (
+              <button type="button" aria-label={cast.casting ? `Casting to ${cast.deviceName}. Stop casting` : "Cast to a device"} title="Cast" onClick={cast.casting ? cast.stop : cast.toggle} className={`${btn} ${cast.casting ? "!text-accent" : ""}`}><CastIcon /></button>
+            )}
             <button type="button" aria-label="Picture in picture" onClick={pip} className={btn}><Pip /></button>
             <button type="button" aria-label={fs ? "Exit full screen" : "Full screen"} onClick={fullscreen} className={btn}><Maximize exit={fs} /></button>
           </div>

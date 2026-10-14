@@ -36,11 +36,21 @@ export async function getLanguages(): Promise<string[]> {
   return (await api<string[]>("/languages")) ?? [];
 }
 
+/** Certifications present in the catalog (PG, R, TV-MA …), most common first. */
+export async function getRatings(): Promise<string[]> {
+  cacheLife("minutes");
+  return (await api<string[]>("/ratings")) ?? [];
+}
+
 export interface BrowseQuery {
   q?: string;
   language?: string;
   type?: Title["type"];
   genre?: string;
+  yearFrom?: number;
+  yearTo?: number;
+  /** Certification, e.g. "PG-13". */
+  rating?: string;
   sort?: "newest" | "name" | "year";
   page: number;
   limit: number;
@@ -59,6 +69,9 @@ export async function browseTitles(q: BrowseQuery): Promise<Page<Title>> {
   if (q.type) p.set("type", q.type);
   if (q.genre) p.set("genre", q.genre);
   if (q.language) p.set("language", q.language);
+  if (q.yearFrom) p.set("yearFrom", String(q.yearFrom));
+  if (q.yearTo) p.set("yearTo", String(q.yearTo));
+  if (q.rating) p.set("rating", q.rating);
   if (q.q) p.set("q", q.q);
   else if (q.sort) p.set("sort", q.sort);
   const data = await api<Page<ApiTitle>>(`${q.q ? "/search" : "/titles"}?${p}`);
@@ -89,4 +102,18 @@ export async function getRelated(id: string): Promise<Title[]> {
   cacheLife("minutes");
   const data = await api<ApiTitle[]>(`/titles/${encodeURIComponent(id)}/related`);
   return (data ?? []).map(toTitle);
+}
+
+/** Published titles releasing in the future, soonest first. */
+export async function getUpcoming(): Promise<Title[]> {
+  cacheLife("minutes");
+  const data = await api<(ApiTitle & { releaseDate: string | null })[]>("/upcoming");
+  return (data ?? []).map((t) => ({ ...toTitle(t), releaseDate: t.releaseDate ?? undefined }));
+}
+
+/** Mood collections for the home chips (key and title only). */
+export async function getCollections(): Promise<{ key: string; title: string }[]> {
+  cacheLife("minutes");
+  const data = await api<{ key: string; title: string }[]>("/collections");
+  return (data ?? []).map((c) => ({ key: c.key, title: c.title }));
 }

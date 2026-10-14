@@ -16,7 +16,7 @@ export interface ApiTitle {
   backdropCredit: string | null;
   accent: string[];
   sources: Source[];
-  episodes?: { season: number; number: number; name?: string | null; overview?: string | null; stillPath?: string | null; runtimeMin?: number | null }[];
+  episodes?: { season: number; number: number; name?: string | null; overview?: string | null; stillPath?: string | null; runtimeMin?: number | null; introStartSec?: number | null; introEndSec?: number | null; creditsStartSec?: number | null }[];
   trailerKey?: string | null;
   credits?: { cast: { name: string; character?: string; profilePath: string | null }[]; crew: { name: string; job: string; profilePath: string | null }[] } | null;
   progress?: number | null;
@@ -55,6 +55,9 @@ export function toTitle(t: ApiTitle): Title {
       overview: e.overview ?? undefined,
       still: imageUrl(e.stillPath ?? null, "w500"),
       runtimeMin: e.runtimeMin ?? undefined,
+      introStartSec: e.introStartSec ?? undefined,
+      introEndSec: e.introEndSec ?? undefined,
+      creditsStartSec: e.creditsStartSec ?? undefined,
     })),
     ...(t.resume && { resume: true, progress: t.progress ?? null, resumeSeason: t.resumeSeason, resumeEpisode: t.resumeEpisode }),
   };

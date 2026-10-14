@@ -2,12 +2,17 @@ import { Injectable, NotFoundException } from "@nestjs/common";
 import { Prisma } from "@prisma/client";
 import { PrismaService } from "../common/prisma.service";
 import { RedisService } from "../common/redis.service";
+import { filtersToWhere } from "../search/query";
+import { keyPeople, relatedScore } from "./related-score";
 
 export interface ListQuery {
   genre?: string;
   language?: string;
   type?: "MOVIE" | "SERIES";
   year?: number;
+  yearFrom?: number;
+  yearTo?: number;
+  rating?: string[];
   q?: string;
   sort?: "newest" | "name" | "year";
   page: number;
@@ -43,10 +48,7 @@ export class TitlesService {
     const where: Prisma.TitleWhereInput = {
       published: true,
       ...HAS_POSTER,
-      ...(q.genre && { genres: { has: q.genre } }),
-      ...(q.language && { language: q.language }),
-      ...(q.type && { type: q.type }),
-      ...(q.year && { year: q.year }),
+      ...filtersToWhere(q),
       ...(q.q && { OR: [{ name: { contains: q.q, mode: "insensitive" } }, { overview: { contains: q.q, mode: "insensitive" } }] }),
     };
     const orderBy: Prisma.TitleOrderByWithRelationInput =
@@ -56,6 +58,27 @@ export class TitlesService {
       this.prisma.title.count({ where }),
     ]);
     return { items: (await this.hideDisabledEmbeds(items)).map(toPublicTitle), total, page: q.page, limit: q.limit };
+  }
+
+  /** Published titles with a poster that release in the future, soonest first. */
+  upcoming(limit = 40) {
+    return this.redis.cached(`titles:upcoming:${limit}`, 300, async () => {
+      const rows = await this.prisma.title.findMany({
+        where: { published: true, ...HAS_POSTER, releaseDate: { gt: new Date() } },
+        orderBy: { releaseDate: "asc" },
+        take: limit,
+        include: { sources: this.sourceSelect },
+      });
+      return (await this.hideDisabledEmbeds(rows)).map(toPublicTitle);
+    });
+  }
+
+  /** Distinct certifications (PG, R, TV-MA…) across published titles, most common first. */
+  ratings() {
+    return this.redis.cached("titles:ratings", 300, async () => {
+      const rows = await this.prisma.title.groupBy({ by: ["rating"], where: { published: true, rating: { not: null } }, _count: { _all: true }, orderBy: { _count: { rating: "desc" } } });
+      return rows.flatMap((r) => (r.rating && r.rating !== "NR" ? [r.rating] : []));
+    });
   }
 
   /** Distinct genres across published titles, alphabetical. */
@@ -100,7 +123,8 @@ export class TitlesService {
     const seed = await this.prisma.title.findFirst({ where: { published: true, OR: [{ id: idOrSlug }, { slug: idOrSlug }] } });
     if (!seed) throw new NotFoundException();
 
-    // Two pools so a regional title isn't drowned out by globally popular English ones.
+    // Pools so a regional title isn't drowned out by globally popular English ones, and people-linked titles surface too.
+    const seedPeople = keyPeople(seed.credits);
     const pool = (or: Prisma.TitleWhereInput[], take: number) =>
       this.prisma.title.findMany({
         where: { published: true, ...HAS_POSTER, id: { not: seed.id }, OR: or },
@@ -108,32 +132,16 @@ export class TitlesService {
         take,
         include: { sources: this.sourceSelect },
       });
-    const [byGenre, byLanguage, coWatch] = await Promise.all([
+    const [byGenre, byLanguage, byPeople, coWatch] = await Promise.all([
       pool([{ genres: { hasSome: seed.genres } }], 250),
       seed.language ? pool([{ language: seed.language, genres: { hasSome: seed.genres } }], 250) : Promise.resolve([]),
+      this.sharedPeopleIds(seed.id, seedPeople).then((ids) => (ids.length ? pool([{ id: { in: ids } }], 60) : [])),
       this.coOccurrence(seed.id),
     ]);
-    const candidates = [...new Map([...byGenre, ...byLanguage].map((t) => [t.id, t])).values()];
+    const candidates = [...new Map([...byGenre, ...byLanguage, ...byPeople].map((t) => [t.id, t])).values()];
 
-    const seedGenres = new Set(seed.genres);
     const maxCo = Math.max(1, ...coWatch.values());
-    const scored = candidates.map((t) => {
-      const shared = t.genres.filter((g) => seedGenres.has(g)).length;
-      const union = seedGenres.size + t.genres.length - shared;
-      const genre = union ? shared / union : 0;
-      const era = seed.year && t.year ? Math.exp(-Math.abs(seed.year - t.year) / 12) : 0.3;
-      const collab = (coWatch.get(t.id) ?? 0) / maxCo;
-      const pop = Math.min(1, Math.log1p(t.popularity) / Math.log1p(300));
-      const votes = Math.min(1, Math.log1p(t.voteCount) / Math.log1p(5000));
-      const score =
-        0.35 * genre +
-        0.2 * (seed.language && t.language === seed.language ? 1 : 0) +
-        0.1 * (t.type === seed.type ? 1 : 0) +
-        0.05 * era +
-        0.15 * collab +
-        0.15 * (0.6 * pop + 0.4 * votes);
-      return { t, score };
-    });
+    const scored = candidates.map((t) => ({ t, score: relatedScore(seed, t, { seedPeople, collab: (coWatch.get(t.id) ?? 0) / maxCo }) }));
     scored.sort((a, b) => b.score - a.score);
 
     // Light diversity pass: don't let one franchise-like name prefix fill the whole row.
@@ -147,6 +155,22 @@ export class TitlesService {
       if (picked.length === limit) break;
     }
     return (await this.hideDisabledEmbeds(picked.map((c) => c.t))).map(toPublicTitle);
+  }
+
+  /** Published titles whose cast or crew include any of `names` (the seed's key people). */
+  private async sharedPeopleIds(seedId: string, names: string[]): Promise<string[]> {
+    if (names.length === 0) return [];
+    const rows = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT t.id FROM "Title" t
+      WHERE t.published AND t.id <> ${seedId} AND t."posterPath" IS NOT NULL AND t."posterPath" <> ''
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(
+            (CASE WHEN jsonb_typeof(t.credits->'cast') = 'array' THEN t.credits->'cast' ELSE '[]'::jsonb END) ||
+            (CASE WHEN jsonb_typeof(t.credits->'crew') = 'array' THEN t.credits->'crew' ELSE '[]'::jsonb END)
+          ) c WHERE c->>'name' = ANY(${names})
+        )
+      LIMIT 200`;
+    return rows.map((r) => r.id);
   }
 
   /** titleId -> number of users who saved/watched both it and the seed. */

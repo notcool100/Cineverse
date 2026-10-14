@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "@/lib/client-api";
+import { CineoraMark } from "./CineoraMark";
+import { NotificationBell } from "./NotificationBell";
 import { ProfileMenu } from "./ProfileMenu";
 import { SearchBox } from "./SearchBox";
 import { SettingsMenu } from "./SettingsMenu";
@@ -32,10 +34,11 @@ export function Navbar() {
       >
         <Link
           href="/"
-          className="mr-3 text-[15px] font-bold tracking-[0.28em] text-white"
+          className="mr-3 flex items-center gap-2 text-[15px] font-bold tracking-[0.28em] text-white"
           aria-label="Cineora home"
         >
-          CINEORA<span className="text-accent">.</span>
+          <CineoraMark className="size-5 shrink-0" />
+          CINEORA
         </Link>
         <ul className="no-scrollbar hidden items-center gap-0.5 overflow-x-auto md:flex">
           {links.map((l) => {
@@ -59,6 +62,7 @@ export function Navbar() {
         </ul>
         <div className="hidden md:block"><SearchBox /></div>
         <SettingsMenu />
+        <NotificationBell />
         {user && profile && <ProfileMenu profile={profile} />}
         {user ? (
           <button

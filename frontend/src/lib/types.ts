@@ -44,6 +44,8 @@ export interface Title {
   /** Continue-watching series cards: the episode to resume (or advance to). */
   resumeSeason?: number;
   resumeEpisode?: number;
+  /** ISO date of the release; set on coming-soon titles. */
+  releaseDate?: string;
   /** TMDB cast and crew; present on the single-title response only. */
   credits?: Credits;
   /** Series only: season/number pairs, present on the single-title response. */
@@ -58,6 +60,10 @@ export interface Episode {
   /** Full still URL, or "" when TMDB has none. */
   still: string;
   runtimeMin?: number;
+  /** Admin-set playback markers, in seconds. Skip intro needs both intro bounds; the up-next card starts at creditsStart. */
+  introStartSec?: number;
+  introEndSec?: number;
+  creditsStartSec?: number;
 }
 
 export interface Credits {

@@ -3,16 +3,18 @@ import { JwtService } from "@nestjs/jwt";
 import {
   ConnectedSocket,
   MessageBody,
-  OnGatewayConnection,
+  OnGatewayInit,
   OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
 } from "@nestjs/websockets";
+import { SkipThrottle } from "@nestjs/throttler";
 import type { Server, Socket } from "socket.io";
 import { PrismaService } from "../common/prisma.service";
 import { requireEnv } from "../common/secrets";
-import { PartyService, type Room } from "./party.service";
+import { PartyService, RateLimiter, cleanChat, isReaction, type Room } from "./party.service";
+import { randomUUID } from "node:crypto";
 
 interface Ctx {
   userId: string;
@@ -24,14 +26,21 @@ type Ack = (res: unknown) => void;
 const int = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 10_000 ? (v as number) : undefined);
 const str = (v: unknown, max = 100) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : undefined);
 
+// The global HTTP throttler keys on req.ip, which sockets don't have: every client would share one bucket. Limits are per socket below.
+@SkipThrottle()
 @WebSocketGateway({
   namespace: "/party",
   cors: { origin: (process.env.CORS_ORIGIN ?? "").split(",").filter(Boolean), credentials: true },
   maxHttpBufferSize: 64 * 1024, // SDP/ICE only
 })
-export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleInit, OnModuleDestroy {
+export class PartyGateway implements OnGatewayInit, OnGatewayDisconnect, OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(PartyGateway.name);
   private sweeper?: ReturnType<typeof setInterval>;
+  private readonly chatLimit = new RateLimiter(6, 10_000);
+  private readonly reactionLimit = new RateLimiter(8, 5_000);
+  /** play/pause/seek, navigation and countdown. Human-speed events; this only stops a runaway client. */
+  private readonly controlLimit = new RateLimiter(40, 10_000);
+  private readonly signalLimit = new RateLimiter(200, 10_000);
   @WebSocketServer() server!: Server;
 
   constructor(
@@ -47,22 +56,31 @@ export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, O
     clearInterval(this.sweeper);
   }
 
-  async handleConnection(client: Socket) {
-    try {
-      const token = str(client.handshake.auth?.token, 2000);
-      if (!token) throw new Error("no token");
-      const p = await this.jwt.verifyAsync<{ sub: string }>(token, { secret: requireEnv("JWT_ACCESS_SECRET") });
-      const user = await this.prisma.user.findUnique({ where: { id: p.sub }, select: { name: true, email: true } });
-      if (!user) throw new Error("no user");
-      client.data = { userId: p.sub, name: user.name ?? user.email.split("@")[0] } satisfies Ctx;
-    } catch {
-      client.emit("party:error", "unauthorized");
-      client.disconnect(true);
-    }
+  /**
+   * Authenticates in a socket.io middleware, so a connection only completes once `client.data` is filled in.
+   * (Doing it in handleConnection raced with fast clients that emit `party:join` the instant they connect.)
+   */
+  afterInit(server: Server) {
+    server.use((client, next) => {
+      void this.authenticate(client).then(
+        () => next(),
+        () => next(new Error("unauthorized")),
+      );
+    });
+  }
+
+  private async authenticate(client: Socket) {
+    const token = str(client.handshake.auth?.token, 2000);
+    if (!token) throw new Error("no token");
+    const p = await this.jwt.verifyAsync<{ sub: string }>(token, { secret: requireEnv("JWT_ACCESS_SECRET") });
+    const user = await this.prisma.user.findUnique({ where: { id: p.sub }, select: { name: true, email: true } });
+    if (!user) throw new Error("no user");
+    client.data = { userId: p.sub, name: user.name ?? user.email.split("@")[0] } satisfies Ctx;
   }
 
   handleDisconnect(client: Socket) {
     this.leave(client);
+    for (const l of [this.chatLimit, this.reactionLimit, this.controlLimit, this.signalLimit]) l.forget(client.id);
   }
 
   @SubscribeMessage("party:create")
@@ -95,6 +113,7 @@ export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, O
       season: room.season,
       episode: room.episode,
       state: this.party.snapshot(room),
+      chat: room.chat,
       peers: [...room.members.values()].filter((m) => m.socketId !== client.id).map((m) => ({ id: m.socketId, name: m.name })),
     };
   }
@@ -109,16 +128,16 @@ export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, O
   @SubscribeMessage("party:state")
   state(@ConnectedSocket() client: Socket, @MessageBody() body: { playing?: unknown; position?: unknown }) {
     const room = this.roomOf(client);
-    if (!room || typeof body?.playing !== "boolean" || typeof body.position !== "number" || !Number.isFinite(body.position) || body.position < 0) return;
+    if (!room || !this.controlLimit.allow(client.id) || typeof body?.playing !== "boolean" || typeof body.position !== "number" || !Number.isFinite(body.position) || body.position < 0) return;
     room.state = { playing: body.playing, position: body.position, at: Date.now() };
-    client.to(room.code).emit("party:state", { ...room.state, by: client.id });
+    client.to(room.code).emit("party:state", { ...room.state, by: client.id, byName: (client.data as Ctx).name });
   }
 
   @SubscribeMessage("party:nav")
   nav(@ConnectedSocket() client: Socket, @MessageBody() body: { titleId?: unknown; season?: unknown; episode?: unknown }) {
     const room = this.roomOf(client);
     const titleId = str(body?.titleId);
-    if (!room || !titleId) return;
+    if (!room || !titleId || !this.controlLimit.allow(client.id)) return;
     room.titleId = titleId;
     room.season = int(body.season);
     room.episode = int(body.episode);
@@ -126,11 +145,32 @@ export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, O
     client.to(room.code).emit("party:nav", { titleId, season: room.season, episode: room.episode });
   }
 
+  /** Room chat: validated, rate limited, kept in a short history, echoed to everyone including the sender. */
+  @SubscribeMessage("party:chat")
+  chat(@ConnectedSocket() client: Socket, @MessageBody() body: { text?: unknown }) {
+    const room = this.roomOf(client);
+    const text = cleanChat(body?.text);
+    if (!room || !text) return { error: "Message can't be empty or longer than 300 characters" };
+    if (!this.chatLimit.allow(client.id)) return { error: "You're sending messages too fast" };
+    const msg = { id: randomUUID(), from: client.id, name: (client.data as Ctx).name, text, at: Date.now() };
+    this.party.addChat(room, msg);
+    this.server.to(room.code).emit("party:chat", msg);
+    return { ok: true };
+  }
+
+  /** Quick emoji reactions shown over the video. */
+  @SubscribeMessage("party:reaction")
+  reaction(@ConnectedSocket() client: Socket, @MessageBody() body: { emoji?: unknown }) {
+    const room = this.roomOf(client);
+    if (!room || !isReaction(body?.emoji) || !this.reactionLimit.allow(client.id)) return;
+    this.server.to(room.code).emit("party:reaction", { id: randomUUID(), from: client.id, name: (client.data as Ctx).name, emoji: body.emoji, at: Date.now() });
+  }
+
   /** "Everyone press play" countdown, for embedded players we can't control. */
   @SubscribeMessage("party:countdown")
   countdown(@ConnectedSocket() client: Socket) {
     const room = this.roomOf(client);
-    if (room) this.server.to(room.code).emit("party:countdown", { startsAt: Date.now() + 4000, by: client.id });
+    if (room && this.controlLimit.allow(client.id)) this.server.to(room.code).emit("party:countdown", { startsAt: Date.now() + 4000, by: client.id });
   }
 
   /** WebRTC signaling relay (offer/answer/ICE) between two members of the same room. */
@@ -138,7 +178,7 @@ export class PartyGateway implements OnGatewayConnection, OnGatewayDisconnect, O
   signal(@ConnectedSocket() client: Socket, @MessageBody() body: { to?: unknown; data?: unknown }) {
     const room = this.roomOf(client);
     const to = str(body?.to, 40);
-    if (!room || !to || !room.members.has(to) || typeof body.data !== "object" || body.data === null) return;
+    if (!room || !to || !this.signalLimit.allow(client.id) || !room.members.has(to) || typeof body.data !== "object" || body.data === null) return;
     this.server.to(to).emit("rtc:signal", { from: client.id, data: body.data });
   }
 

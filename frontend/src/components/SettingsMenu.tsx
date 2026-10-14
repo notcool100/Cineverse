@@ -2,6 +2,8 @@
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { ACCENTS, DEFAULT_PREFS, loadPrefs, savePrefs, type Prefs } from "@/lib/prefs";
+import { InstallButton } from "./InstallButton";
+import { PlaybackPrefsForm } from "./PlaybackPrefsForm";
 
 let lastRaw: string | null | undefined;
 let last: Prefs = DEFAULT_PREFS;
@@ -26,7 +28,7 @@ const subscribe = (cb: () => void) => {
 };
 export const usePrefs = () => useSyncExternalStore(subscribe, snapshot, () => DEFAULT_PREFS);
 
-/** Appearance popover: theme, accent colour, reduced motion. */
+/** Settings popover: device appearance (theme, accent, motion) and the active profile's playback preferences. */
 export function SettingsMenu() {
   const prefs = usePrefs();
   const [open, setOpen] = useState(false);
@@ -51,7 +53,7 @@ export function SettingsMenu() {
     <div ref={box} className="relative ml-1">
       <button
         type="button"
-        aria-label="Appearance settings"
+        aria-label="Settings"
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((o) => !o)}
@@ -63,7 +65,7 @@ export function SettingsMenu() {
         </svg>
       </button>
       {open && (
-        <div id={id} role="dialog" aria-label="Appearance" className="glass-menu absolute right-0 top-full z-50 mt-3 w-64 rounded-2xl p-4 text-sm">
+        <div id={id} role="dialog" aria-label="Settings" className="glass-menu absolute right-0 top-full z-50 mt-3 max-h-[80vh] w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-2xl p-4 text-sm">
           <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/45">Theme</p>
           <div role="radiogroup" aria-label="Theme" className="mb-4 grid grid-cols-2 gap-1 rounded-xl bg-white/8 p-1">
             {(["dark", "light"] as const).map((t) => (
@@ -107,6 +109,8 @@ export function SettingsMenu() {
               className="size-4 accent-[var(--accent)]"
             />
           </label>
+          <PlaybackPrefsForm />
+          <InstallButton />
         </div>
       )}
     </div>

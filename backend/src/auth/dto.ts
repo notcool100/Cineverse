@@ -12,3 +12,13 @@ export class LoginDto {
 export class RefreshDto {
   @IsString() refreshToken: string;
 }
+export class EmailDto {
+  @IsEmail() email: string;
+}
+export class TokenDto {
+  @IsString() @MinLength(20) @MaxLength(100) token: string;
+}
+export class ResetPasswordDto {
+  @IsString() @MinLength(20) @MaxLength(100) token: string;
+  @IsString() @MinLength(8) @MaxLength(128) password: string;
+}

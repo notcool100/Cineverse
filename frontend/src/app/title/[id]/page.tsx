@@ -7,6 +7,7 @@ import { BackdropImage, posterStyle } from "@/components/Poster";
 import { ViewBeacon } from "@/components/ViewBeacon";
 import { EpisodeBrowser } from "@/components/EpisodeBrowser";
 import { CastCrew } from "@/components/CastCrew";
+import { MatchChip } from "@/components/MatchChip";
 import { TitleCard } from "@/components/TitleCard";
 import { HeroSkeleton, RowSkeleton } from "@/components/Skeleton";
 
@@ -75,6 +76,7 @@ async function TitleContent({ params }: { params: PageProps<"/title/[id]">["para
               {title.name}
             </h1>
             <ul aria-label="Details" className="rise rise-3 mt-5 flex flex-wrap items-center gap-2">
+              <MatchChip slug={title.id} />
               <Chip outline>{title.rating}</Chip>
               {title.year > 0 && <Chip>{title.year}</Chip>}
               {title.runtimeMin > 0 && <Chip>{runtime(title.runtimeMin)}</Chip>}

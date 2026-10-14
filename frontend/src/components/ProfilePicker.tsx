@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createProfile, deleteProfile, getProfiles, saveProfile, updateProfile, type Profile } from "@/lib/client-api";
+import { createProfile, deleteProfile, getProfiles, saveProfile, updateProfile, verifyProfilePin, type Profile } from "@/lib/client-api";
 import { AVATARS, avatarColor, useProfile } from "./useProfile";
 import { useUser } from "./useSession";
 
@@ -17,6 +17,9 @@ export function ProfilePicker() {
   const [manage, setManage] = useState(useSearchParams().get("manage") === "1");
   const [editing, setEditing] = useState<Profile | "new" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** A PIN prompt in flight, and the unlock token for the locked profile being edited. */
+  const [pinFor, setPinFor] = useState<{ profile: Profile; then: (token: string) => void } | null>(null);
+  const [unlock, setUnlock] = useState<string | undefined>();
 
   useEffect(() => {
     if (!user) return;
@@ -26,21 +29,35 @@ export function ProfilePicker() {
   if (!user) return <p className="text-white/70">Sign in to choose a profile.</p>;
   if (!profiles) return <p className="text-white/60">{error ?? "Loading…"}</p>;
 
-  const pick = (p: Profile) => {
-    saveProfile(p);
+  const finishPick = (p: Profile, pinToken?: string) => {
+    saveProfile({ ...p, ...(pinToken && { pinToken }) });
     // Full reload on purpose: every row and per-profile fetch must start fresh.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination
     window.location.assign("/");
   };
+  const pick = (p: Profile) => (p.hasPin ? setPinFor({ profile: p, then: (t) => finishPick(p, t) }) : finishPick(p));
+  /** Editing a locked profile starts with its PIN, so a borrowed session can't strip the lock. */
+  const edit = (p: Profile) => {
+    setUnlock(undefined);
+    if (!p.hasPin) return setEditing(p);
+    setPinFor({
+      profile: p,
+      then: (t) => {
+        setUnlock(t);
+        setEditing(p);
+      },
+    });
+  };
 
-  async function save(draft: { name: string; avatar: string; isKids: boolean }) {
+  async function save(draft: { name: string; avatar: string; isKids: boolean; pin?: string | null }) {
     setError(null);
     try {
       if (editing === "new") {
-        const p = await createProfile(draft);
+        const { pin, ...rest } = draft;
+        const p = await createProfile({ ...rest, ...(pin ? { pin } : {}) });
         setProfiles((l) => [...(l ?? []), p]);
       } else if (editing) {
-        const p = await updateProfile(editing.id, draft);
+        const p = await updateProfile(editing.id, draft, unlock);
         setProfiles((l) => l?.map((x) => (x.id === p.id ? p : x)) ?? null);
         if (active?.id === p.id) saveProfile(p);
       }
@@ -53,7 +70,7 @@ export function ProfilePicker() {
   async function remove(p: Profile) {
     if (!confirm(`Delete ${p.name}? Their list, history and ratings will be removed.`)) return;
     try {
-      await deleteProfile(p.id);
+      await deleteProfile(p.id, unlock);
       setProfiles((l) => l?.filter((x) => x.id !== p.id) ?? null);
       if (active?.id === p.id) saveProfile(null);
       setEditing(null);
@@ -62,6 +79,18 @@ export function ProfilePicker() {
     }
   }
 
+  if (pinFor)
+    return (
+      <PinDialog
+        profile={pinFor.profile}
+        onCancel={() => setPinFor(null)}
+        onUnlocked={(token) => {
+          const next = pinFor.then;
+          setPinFor(null);
+          next(token);
+        }}
+      />
+    );
   if (editing) return <ProfileForm initial={editing === "new" ? undefined : editing} error={error} onSave={save} onCancel={() => setEditing(null)} onDelete={editing !== "new" && profiles.length > 1 ? () => remove(editing) : undefined} />;
 
   return (
@@ -70,10 +99,11 @@ export function ProfilePicker() {
       <ul className="flex flex-wrap justify-center gap-6">
         {profiles.map((p) => (
           <li key={p.id}>
-            <button onClick={() => (manage ? setEditing(p) : pick(p))} className="group w-28 text-center sm:w-32" aria-label={`${manage ? "Edit" : "Watch as"} ${p.name}`}>
+            <button onClick={() => (manage ? edit(p) : pick(p))} className="group w-28 text-center sm:w-32" aria-label={`${manage ? "Edit" : "Watch as"} ${p.name}`}>
               <Avatar profile={p} ring={p.id === active?.id} />
               <span className="mt-3 block truncate text-sm text-white/70 group-hover:text-white">{p.name}</span>
               {p.isKids && <span className="text-[11px] uppercase tracking-wider text-accent">Kids</span>}
+              {p.hasPin && <span className="ml-1 text-[11px] text-white/45" title="PIN protected">🔒</span>}
             </button>
           </li>
         ))}
@@ -120,18 +150,23 @@ function ProfileForm({
 }: {
   initial?: Profile;
   error: string | null;
-  onSave: (d: { name: string; avatar: string; isKids: boolean }) => void;
+  onSave: (d: { name: string; avatar: string; isKids: boolean; pin?: string | null }) => void;
   onCancel: () => void;
   onDelete?: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [avatar, setAvatar] = useState(initial?.avatar ?? "0");
   const [isKids, setIsKids] = useState(initial?.isKids ?? false);
+  // "" = leave the lock as it is; 4 digits = set/change it; remove = clear it.
+  const [pin, setPin] = useState("");
+  const [removePin, setRemovePin] = useState(false);
+  const pinOk = pin === "" || /^\d{4}$/.test(pin);
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (name.trim()) onSave({ name: name.trim(), avatar, isKids });
+        if (!name.trim() || !pinOk) return;
+        onSave({ name: name.trim(), avatar, isKids, ...(removePin ? { pin: null } : pin ? { pin } : {}) });
       }}
       className="mx-auto max-w-sm space-y-6 text-left"
     >
@@ -163,6 +198,29 @@ function ProfileForm({
         <input type="checkbox" checked={isKids} onChange={(e) => setIsKids(e.target.checked)} className="size-4" />
         <span>Kids profile <span className="block text-xs text-white/50">Shows family and animation titles only on the home page.</span></span>
       </label>
+      <fieldset className="space-y-2 text-sm">
+        <legend className="mb-1">PIN lock {initial?.hasPin && !removePin && <span className="text-xs text-white/50">· on</span>}</legend>
+        <p className="text-xs text-white/50">A 4-digit PIN is asked whenever someone opens this profile. Handy for adult profiles, or to keep kids profiles from being switched off.</p>
+        {!removePin && (
+          <input
+            value={pin}
+            onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+            inputMode="numeric"
+            autoComplete="off"
+            type="password"
+            placeholder={initial?.hasPin ? "New PIN (leave empty to keep)" : "Set a 4-digit PIN (optional)"}
+            aria-label="PIN"
+            aria-invalid={!pinOk}
+            className="w-full rounded-md border border-white/15 bg-white/10 px-4 py-3 tracking-[0.4em] placeholder:tracking-normal"
+          />
+        )}
+        {initial?.hasPin && (
+          <label className="flex items-center gap-2 text-xs text-white/70">
+            <input type="checkbox" checked={removePin} onChange={(e) => setRemovePin(e.target.checked)} /> Remove the PIN
+          </label>
+        )}
+        {!pinOk && <p className="text-xs text-red-400">A PIN is exactly 4 digits.</p>}
+      </fieldset>
       {error && <p className="text-sm text-red-400">{error}</p>}
       <div className="flex gap-3">
         <button className="rounded-full bg-white px-6 py-2 font-semibold text-black">Save</button>
@@ -172,5 +230,64 @@ function ProfileForm({
         )}
       </div>
     </form>
+  );
+}
+
+/** Asks for a locked profile's PIN; the token it returns unlocks that profile for 12 hours. */
+function PinDialog({ profile, onUnlocked, onCancel }: { profile: Profile; onUnlocked: (token: string) => void; onCancel: () => void }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const field = useRef<HTMLInputElement>(null);
+
+  async function submit(value: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      const token = await verifyProfilePin(profile.id, value);
+      if (token) onUnlocked(token);
+      else setError("This profile has no PIN.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't check the PIN.");
+      setPin("");
+    } finally {
+      setBusy(false);
+      // The field was disabled while checking, which dropped focus: take it back so another try can be typed straight away.
+      requestAnimationFrame(() => field.current?.focus());
+    }
+  }
+
+  return (
+    <div role="dialog" aria-label={`Enter PIN for ${profile.name}`} className="mx-auto max-w-xs text-center">
+      <div className="mx-auto mb-4 w-24"><Avatar profile={profile} /></div>
+      <h1 className="text-2xl font-bold">{profile.name}</h1>
+      <p className="mb-6 mt-1 text-sm text-white/55">Enter this profile&apos;s 4-digit PIN.</p>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (/^\d{4}$/.test(pin)) void submit(pin);
+        }}
+      >
+        <input
+          ref={field}
+          autoFocus
+          value={pin}
+          onChange={(e) => {
+            const v = e.target.value.replace(/\D/g, "").slice(0, 4);
+            setPin(v);
+            if (v.length === 4 && !busy) void submit(v);
+          }}
+          inputMode="numeric"
+          autoComplete="off"
+          type="password"
+          aria-label="PIN"
+          aria-invalid={!!error}
+          disabled={busy}
+          className="w-44 rounded-xl border border-white/20 bg-white/10 py-3 text-center text-3xl tracking-[0.6em] outline-none focus:border-accent"
+        />
+      </form>
+      <p role="alert" className="mt-3 min-h-5 text-sm text-red-400">{error}</p>
+      <button type="button" onClick={onCancel} className="mt-4 text-sm text-white/55 hover:text-white">Cancel</button>
+    </div>
   );
 }

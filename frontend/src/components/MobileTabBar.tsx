@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { loadRecent, pushRecent, saveRecent } from "@/lib/recent-searches";
 import { useUser } from "./useSession";
 
 const Icon = ({ children }: { children: ReactNode }) => (
@@ -63,6 +64,13 @@ function SearchSheet({ onClose }: { onClose: () => void }) {
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState("");
+  const [recent] = useState(loadRecent);
+  const go = (text: string) => {
+    const v = text.trim();
+    if (!v) return;
+    saveRecent(pushRecent(loadRecent(), v));
+    router.push(`/browse?q=${encodeURIComponent(v)}`);
+  };
   useEffect(() => {
     input.current?.focus();
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -76,11 +84,17 @@ function SearchSheet({ onClose }: { onClose: () => void }) {
         role="search"
         onSubmit={(e) => {
           e.preventDefault();
-          const v = q.trim();
-          if (v) router.push(`/browse?q=${encodeURIComponent(v)}`);
+          go(q);
         }}
-        className="glass-menu absolute inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] flex items-center gap-2 rounded-2xl p-2"
+        className="glass-menu absolute inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] flex flex-wrap items-center gap-2 rounded-2xl p-2"
       >
+        {recent.length > 0 && !q && (
+          <div className="flex w-full flex-wrap gap-1.5 px-1 pt-1" aria-label="Recent searches">
+            {recent.map((r) => (
+              <button key={r} type="button" onClick={() => go(r)} className="glass-soft rounded-full px-3 py-1 text-xs text-white/75">{r}</button>
+            ))}
+          </div>
+        )}
         <input
           ref={input}
           type="search"

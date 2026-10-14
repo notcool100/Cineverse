@@ -35,12 +35,21 @@ model User {
   passwordHash String?
   name         String?
   role         Role     @default(USER)
+  /// Set once the user follows the link in the verification email (or resets their password via email).
+  emailVerifiedAt DateTime?
   createdAt    DateTime @default(now())
   watchlist    WatchlistItem[]
   history      WatchHistory[]
   ratings      Rating[]
   profiles     Profile[]
   refreshTokens RefreshToken[]
+  notifications Notification[]
+  reminders    Reminder[]
+  reports      SourceReport[]
+  requests     TitleRequest[]
+  requestVotes TitleRequestVote[]
+  lists        UserList[]
+  emailTokens  EmailToken[]
 }
 
 model RefreshToken {
@@ -86,6 +95,10 @@ model Title {
   watchlist    WatchlistItem[]
   history      WatchHistory[]
   ratings      Rating[]
+  notifications Notification[]
+  reminders    Reminder[]
+  reports      SourceReport[]
+  listItems    UserListItem[]
   @@index([published, createdAt])
   @@index([published, language])
   @@index([published, popularity])
@@ -101,6 +114,11 @@ model Episode {
   /// TMDB still path (bare, e.g. "/abc.jpg").
   stillPath  String?
   runtimeMin Int?
+  /// Playback markers in seconds from the start, set by an admin. Intro skipping only appears when both intro fields are set.
+  introStartSec  Int?
+  introEndSec    Int?
+  /// Where the end credits begin; the "Next episode" card appears from here.
+  creditsStartSec Int?
   title   Title   @relation(fields: [titleId], references: [id], onDelete: Cascade)
   sources Source[]
   @@unique([titleId, season, number])
@@ -150,6 +168,10 @@ model Profile {
   name      String
   avatar    String   @default("0")
   isKids    Boolean  @default(false)
+  /// Playback preferences (see src/me/profile-prefs.ts); null = defaults.
+  prefs     Json?
+  /// argon2 hash of a 4-digit PIN; when set, using the profile needs a short-lived token from verify-pin.
+  pinHash   String?
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@index([userId])
@@ -189,4 +211,132 @@ model Rating {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   title     Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
   @@id([userId, profileId, titleId])
+}
+
+enum NotificationType {
+  SOURCE_ADDED
+  EPISODE_ADDED
+  RELEASED
+  REQUEST_FULFILLED
+}
+
+/// In-app notification for one profile ("" = every profile of the user).
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  profileId String           @default("")
+  type      NotificationType
+  titleId   String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     Title            @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@index([userId, profileId, createdAt])
+  @@index([titleId, type, createdAt])
+}
+
+/// "Remind me" on a coming-soon title; notified once when the release date passes.
+model Reminder {
+  userId     String
+  profileId  String   @default("")
+  titleId    String
+  createdAt  DateTime @default(now())
+  notifiedAt DateTime?
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@id([userId, profileId, titleId])
+}
+
+/// A viewer's "this source is broken" report. `sourceKey` is a Source id, or `provider:<slug>` for registry embeds.
+/// `episodeKey` is "" for movies or "S1E2". One report per user per source/episode; reporting again reopens it.
+model SourceReport {
+  id         String    @id @default(cuid())
+  userId     String
+  titleId    String
+  sourceKey  String
+  episodeKey String    @default("")
+  reason     String    @default("BROKEN")
+  note       String?
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      Title     @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@unique([userId, titleId, sourceKey, episodeKey])
+  @@index([titleId, sourceKey, createdAt])
+  @@index([resolvedAt, createdAt])
+}
+
+enum RequestStatus {
+  OPEN
+  ADDED
+  REJECTED
+}
+
+/// "Please add this title." Votes decide the order admins work through them.
+model TitleRequest {
+  id        String        @id @default(cuid())
+  userId    String
+  name      String
+  type      TitleType
+  tmdbId    Int?
+  note      String?
+  status    RequestStatus @default(OPEN)
+  /// Set when an admin marks the request ADDED.
+  titleId   String?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  votes     TitleRequestVote[]
+  @@index([status, createdAt])
+}
+
+model TitleRequestVote {
+  requestId String
+  userId    String
+  createdAt DateTime     @default(now())
+  request   TitleRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([requestId, userId])
+}
+
+/// Custom list beyond the single My List ("Weekend picks"). Scoped to a profile like the watchlist.
+model UserList {
+  id          String         @id @default(cuid())
+  userId      String
+  profileId   String         @default("")
+  name        String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       UserListItem[]
+  @@index([userId, profileId])
+}
+
+model UserListItem {
+  listId  String
+  titleId String
+  addedAt DateTime @default(now())
+  list    UserList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  title   Title    @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  @@id([listId, titleId])
+  @@index([titleId])
+}
+
+enum EmailTokenKind {
+  VERIFY
+  RESET
+}
+
+/// One-time link token sent by email. Only the SHA-256 hash is stored.
+model EmailToken {
+  id        String         @id @default(cuid())
+  userId    String
+  kind      EmailTokenKind
+  tokenHash String         @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime       @default(now())
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, kind, createdAt])
 }

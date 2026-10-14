@@ -36,13 +36,16 @@ export function buildEntries(
   providers: ProviderInfo[],
   titleType: "MOVIE" | "SERIES" = "MOVIE",
   latency: Record<string, number> = {},
+  /** Preferred audio language: servers that offer it are listed before those that don't. */
+  audioLang = "",
 ): PickerEntry[] {
   const own = sources.map((s): PickerEntry => ({ ...s, state: "enabled" }));
   const need = titleType === "SERIES" ? "tv" : "movie";
   // Probed providers first (fastest to slowest); unprobed or unreachable ones keep registry order after them.
   const rank = (p: ProviderInfo) => latency[p.slug] ?? Infinity;
+  const speaks = (p: ProviderInfo) => (audioLang && p.languages?.includes(audioLang) ? 0 : 1);
   const reg = [...providers]
-    .sort((a, b) => (rank(a) === rank(b) ? a.order - b.order : rank(a) - rank(b)))
+    .sort((a, b) => speaks(a) - speaks(b) || (rank(a) === rank(b) ? a.order - b.order : rank(a) - rank(b)))
     .map(
       (p): PickerEntry => ({
         id: `provider:${p.slug}`,

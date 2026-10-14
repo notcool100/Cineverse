@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { signIn } from "@/lib/client-api";
 
@@ -45,6 +46,9 @@ export function AuthForm() {
         autoComplete={mode === "login" ? "current-password" : "new-password"}
         className={input}
       />
+      {mode === "login" && (
+        <Link href="/forgot-password" className="-mt-1 block text-right text-xs text-white/55 hover:text-white">Forgot password?</Link>
+      )}
       {error && (
         <p role="alert" className="text-sm text-red-400">
           {error}

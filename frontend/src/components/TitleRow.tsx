@@ -19,7 +19,19 @@ function Chevron({ dir }: { dir: "left" | "right" }) {
  * Horizontal carousel. Native overflow scrolling gives swipe/trackpad + scroll-snap on touch;
  * the arrow buttons page by one viewport, and the cards inside remain ordinary tab stops.
  */
-export function TitleRow({ heading, titles }: { heading: string; titles: Title[] }) {
+export function TitleRow({
+  heading,
+  titles,
+  variant,
+  onRemove,
+}: {
+  heading: string;
+  titles: Title[];
+  /** "top10" draws a large rank numeral behind each poster. */
+  variant?: "top10";
+  /** Continue-watching rows: lets a card be dismissed. */
+  onRemove?: (t: Title) => void;
+}) {
   const scroller = useRef<HTMLDivElement>(null);
   const [edge, setEdge] = useState({ start: true, end: false });
 
@@ -70,9 +82,23 @@ export function TitleRow({ heading, titles }: { heading: string; titles: Title[]
           className="no-scrollbar flex snap-x snap-mandatory gap-4 overflow-x-auto overscroll-x-contain pb-6 pt-1 [-webkit-overflow-scrolling:touch]"
           style={{ paddingInline: gutter, scrollPaddingInline: gutter }}
         >
-          {titles.map((t) => (
-            <TitleCard key={t.id} title={t} />
-          ))}
+          {titles.map((t, i) =>
+            variant === "top10" ? (
+              <div key={t.id} className="relative flex shrink-0 snap-start items-end pl-14 sm:pl-20">
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -left-1 bottom-0 select-none text-[9rem] font-black leading-[0.8] tracking-tighter text-transparent sm:text-[11rem]"
+                  style={{ WebkitTextStroke: "3px color-mix(in srgb, var(--foreground, #fff) 55%, transparent)" }}
+                >
+                  {i + 1}
+                </span>
+                <span className="sr-only">Number {i + 1}</span>
+                <TitleCard title={t} />
+              </div>
+            ) : (
+              <TitleCard key={t.id} title={t} onRemove={onRemove} />
+            ),
+          )}
         </div>
       </div>
     </section>

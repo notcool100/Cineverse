@@ -16,6 +16,14 @@ export interface PlayState {
   /** Server time (ms) when `position` was valid; lets late joiners extrapolate. */
   at: number;
 }
+export interface ChatMessage {
+  id: string;
+  from: string;
+  name: string;
+  text: string;
+  at: number;
+}
+
 export interface Room {
   code: string;
   titleId: string;
@@ -23,7 +31,45 @@ export interface Room {
   episode?: number;
   members: Map<string, Member>;
   state: PlayState;
+  /** Last CHAT_HISTORY messages, replayed to people who join late. */
+  chat: ChatMessage[];
   emptySince?: number;
+}
+
+export const CHAT_HISTORY = 50;
+export const MAX_CHAT_LENGTH = 300;
+/** Reactions a member may send; anything else is dropped. */
+export const REACTIONS = ["👍", "😂", "😮", "😢", "❤️", "👏", "🔥"] as const;
+export const isReaction = (v: unknown): v is (typeof REACTIONS)[number] => typeof v === "string" && (REACTIONS as readonly string[]).includes(v);
+
+/** Trims, collapses control characters and enforces length; returns undefined for empty/invalid chat text. */
+export function cleanChat(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined;
+  // eslint-disable-next-line no-control-regex
+  const t = v.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
+  return t.length > 0 && t.length <= MAX_CHAT_LENGTH ? t : undefined;
+}
+
+/** Allows `limit` events per `windowMs` per key (sliding window). In-memory, per API instance. */
+export class RateLimiter {
+  private readonly hits = new Map<string, number[]>();
+  constructor(
+    private readonly limit: number,
+    private readonly windowMs: number,
+  ) {}
+  allow(key: string, now = Date.now()): boolean {
+    const recent = (this.hits.get(key) ?? []).filter((t) => now - t < this.windowMs);
+    if (recent.length >= this.limit) {
+      this.hits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    this.hits.set(key, recent);
+    return true;
+  }
+  forget(key: string) {
+    this.hits.delete(key);
+  }
 }
 
 /** In-memory rooms. Single API instance only; use the socket.io Redis adapter + Redis store to scale out. */
@@ -42,6 +88,7 @@ export class PartyService {
       episode,
       members: new Map(),
       state: { playing: false, position: 0, at: Date.now() },
+      chat: [],
       emptySince: Date.now(),
     };
     this.rooms.set(code, room);
@@ -62,6 +109,11 @@ export class PartyService {
   leave(room: Room, socketId: string) {
     room.members.delete(socketId);
     if (room.members.size === 0) room.emptySince = Date.now();
+  }
+
+  addChat(room: Room, msg: ChatMessage) {
+    room.chat.push(msg);
+    if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
   }
 
   /** Current position, extrapolated if playing. */

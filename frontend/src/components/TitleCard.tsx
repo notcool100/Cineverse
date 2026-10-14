@@ -6,17 +6,37 @@ import { useRouter } from "next/navigation";
 import type { Title } from "@/lib/types";
 import { trailerSrc, useAutoplayAllowed } from "./TrailerLoop";
 import { PlayGlyph, PosterImage, posterStyle } from "./Poster";
+import { HoverCard } from "./HoverCard";
+import { useProfilePrefs } from "./useProfilePrefs";
 
 const HOVER_MS = 700;
 const LONG_PRESS_MS = 500;
+const CLOSE_MS = 140;
 
-export function TitleCard({ title }: { title: Title }) {
+export function TitleCard({ title, onRemove, removeLabel = "Remove from Continue watching" }: { title: Title; onRemove?: (t: Title) => void; removeLabel?: string }) {
   const router = useRouter();
   const allowed = useAutoplayAllowed();
   const [preview, setPreview] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const longPressed = useRef(false);
-  const canPreview = allowed && !!title.trailerKey;
+  const { autoplayPreviews } = useProfilePrefs();
+  const canPreview = allowed && autoplayPreviews && !!title.trailerKey;
+  const link = useRef<HTMLAnchorElement>(null);
+  // Mouse hover opens the expanded card (portal); focus and long-press keep the in-card preview.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const openTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const openCard = () => {
+    clearTimeout(closeTimer.current);
+    clearTimeout(openTimer.current);
+    openTimer.current = setTimeout(() => link.current && setAnchor(link.current.getBoundingClientRect()), HOVER_MS);
+  };
+  const keepCard = () => clearTimeout(closeTimer.current);
+  const closeCard = () => {
+    clearTimeout(openTimer.current);
+    clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setAnchor(null), CLOSE_MS);
+  };
   const href = title.resume ? `/watch/${title.id}${title.resumeSeason ? `?season=${title.resumeSeason}&episode=${title.resumeEpisode}` : ""}` : `/title/${title.id}`;
   // Warm the destination as soon as intent shows (hover/focus), ahead of the in-viewport prefetch.
   const warm = () => router.prefetch(href);
@@ -29,7 +49,14 @@ export function TitleCard({ title }: { title: Title }) {
     clearTimeout(timer.current);
     setPreview(false);
   };
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(timer.current);
+      clearTimeout(openTimer.current);
+      clearTimeout(closeTimer.current);
+    },
+    [],
+  );
   // After a long-press the preview stays up until the next touch elsewhere.
   useEffect(() => {
     if (!preview || !longPressed.current) return;
@@ -44,13 +71,15 @@ export function TitleCard({ title }: { title: Title }) {
     };
   }, [preview]);
 
-  return (
+  const card = (
     <Link
-      onMouseEnter={() => {
+      ref={link}
+      onPointerEnter={(e) => {
+        if (e.pointerType !== "mouse") return;
         warm();
-        arm(HOVER_MS);
+        openCard();
       }}
-      onMouseLeave={disarm}
+      onPointerLeave={(e) => e.pointerType === "mouse" && closeCard()}
       onFocus={() => {
         warm();
         arm(HOVER_MS);
@@ -115,5 +144,32 @@ export function TitleCard({ title }: { title: Title }) {
         </div>
       )}
     </Link>
+  );
+  const expanded = anchor && (
+    <HoverCard title={title} anchor={anchor} href={href} trailer={canPreview} onEnter={keepCard} onLeave={closeCard} />
+  );
+  if (!onRemove)
+    return (
+      <>
+        {card}
+        {expanded}
+      </>
+    );
+  return (
+    <div className="group/remove relative shrink-0 snap-start">
+      {card}
+      {expanded}
+      <button
+        type="button"
+        aria-label={`${removeLabel}: ${title.name}`}
+        title={removeLabel}
+        onClick={() => onRemove(title)}
+        className="on-dark glass absolute right-2 top-2 z-10 grid size-8 place-items-center rounded-full text-white opacity-0 transition hover:bg-white/25 focus-visible:opacity-100 group-hover/remove:opacity-100 [@media(hover:none)]:opacity-100"
+      >
+        <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
+          <path d="M6 6l12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </div>
   );
 }

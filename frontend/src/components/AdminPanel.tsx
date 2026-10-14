@@ -8,10 +8,11 @@ import {
 } from "@/lib/client-api";
 import type { ProviderInfo } from "@/lib/sources";
 import { useUser } from "./useSession";
+import { AdminEpisodes } from "./AdminEpisodes";
+import { AdminAnalyticsPanel } from "./AdminAnalytics";
+import { AdminModeration } from "./AdminModeration";
+import { btn, errText, input, Msg, Section } from "./AdminUi";
 
-const input = "w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none focus:border-accent";
-const btn = "rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black disabled:opacity-40";
-const errText = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
 export function AdminPanel() {
   const user = useUser();
@@ -22,28 +23,63 @@ export function AdminPanel() {
       </p>
     );
   if (user.role !== "ADMIN") return <p className="text-white/60">This page is for administrators.</p>;
+  return <AdminTabs />;
+}
+
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "moderation", label: "Moderation" },
+  { key: "catalog", label: "Catalog" },
+  { key: "sources", label: "Sources" },
+  { key: "accounts", label: "Accounts" },
+] as const;
+type Tab = (typeof TABS)[number]["key"];
+
+function AdminTabs() {
+  const [tab, setTab] = useState<Tab>(() => {
+    const h = typeof window !== "undefined" ? window.location.hash.slice(1) : "";
+    return TABS.some((t) => t.key === h) ? (h as Tab) : "overview";
+  });
+  const pick = (t: Tab) => {
+    setTab(t);
+    window.history.replaceState(null, "", `#${t}`);
+  };
   return (
-    <div className="space-y-12">
-      <Hosts />
-      <Providers />
-      <Titles />
-      <Admins />
+    <div>
+      <div role="tablist" aria-label="Admin sections" className="mb-8 flex flex-wrap gap-2">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            role="tab"
+            id={`tab-${t.key}`}
+            aria-selected={tab === t.key}
+            aria-controls={`panel-${t.key}`}
+            onClick={() => pick(t.key)}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${tab === t.key ? "bg-white text-black" : "glass-soft text-white/70 hover:text-white"}`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} className="space-y-12">
+        {tab === "overview" && <AdminAnalyticsPanel />}
+        {tab === "moderation" && <AdminModeration />}
+        {tab === "catalog" && (
+          <>
+            <Titles />
+            <AdminEpisodes />
+          </>
+        )}
+        {tab === "sources" && (
+          <>
+            <Hosts />
+            <Providers />
+          </>
+        )}
+        {tab === "accounts" && <Admins />}
+      </div>
     </div>
   );
-}
-
-function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <section>
-      <h2 className="text-xl font-semibold">{title}</h2>
-      {hint && <p className="mb-4 mt-1 max-w-3xl text-sm text-white/55">{hint}</p>}
-      <div className="glass space-y-3 rounded-2xl p-5">{children}</div>
-    </section>
-  );
-}
-
-function Msg({ ok, text }: { ok?: boolean; text: string | null }) {
-  return text ? <p className={`text-sm ${ok ? "text-emerald-300" : "text-red-300"}`}>{text}</p> : null;
 }
 
 function Hosts() {

@@ -33,7 +33,7 @@ export function KidsRows() {
     <div className="space-y-4 pt-28">
       <h1 className="px-5 text-3xl font-bold sm:px-10">Kids</h1>
       {!rows && <RowSkeleton />}
-      {rows?.map((r) => <TitleRow key={r.key} heading={r.title} titles={r.items} />)}
+      {rows?.map((r) => <TitleRow key={r.key} heading={r.title} titles={r.items} variant={r.key === "top10" ? "top10" : undefined} />)}
     </div>
   );
 }

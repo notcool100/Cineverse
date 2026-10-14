@@ -198,3 +198,110 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .float { animation: none; }
 }
+
+/* ---- CineoraIntro: cinematic logo reveal (~2.1s). Pure CSS so it plays even before hydration. ---- */
+.ci-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  background: #050507;
+  pointer-events: none;
+  overflow: hidden;
+  animation: ci-overlay 2.1s linear forwards;
+}
+:root[data-intro="skip"] .ci-overlay { display: none; }
+.ci-logo {
+  display: flex;
+  align-items: center;
+  font-size: clamp(2.1rem, 9.5vw, 5.5rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  color: #fff;
+  will-change: transform, opacity, filter;
+  animation: ci-logo 2.1s cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+}
+.ci-word {
+  background: linear-gradient(105deg, #fff 35%, #fff 42%, #ffd9d9 50%, #fff 58%, #fff 65%) 100% 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ci-sheen 1.1s cubic-bezier(0.4, 0, 0.2, 1) 0.7s forwards;
+}
+.ci-reel {
+  width: 0.8em;
+  height: 0.8em;
+  margin: 0 0.06em 0 -0.02em;
+  animation: ci-reel 1.4s cubic-bezier(0.22, 0.61, 0.36, 1) 0.1s both;
+  filter: drop-shadow(0 0 0.12em color-mix(in srgb, var(--accent) 55%, transparent));
+}
+.ci-glow {
+  position: absolute;
+  width: min(90vw, 56rem);
+  aspect-ratio: 2 / 1;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 28%, transparent), transparent);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: ci-glow 2.1s ease-out forwards;
+}
+@keyframes ci-overlay {
+  0%, 82% { opacity: 1; visibility: visible; }
+  100% { opacity: 0; visibility: hidden; }
+}
+@keyframes ci-logo {
+  0% { opacity: 0; transform: scale(0.75); filter: blur(10px); }
+  48% { opacity: 1; transform: scale(1); filter: blur(0); }
+  68% { opacity: 1; transform: scale(1); filter: blur(0); }
+  90% { opacity: 0.9; transform: scale(1.08); filter: blur(0); }
+  100% { opacity: 0; transform: scale(1.14); filter: blur(3px); }
+}
+@keyframes ci-glow {
+  0% { opacity: 0; transform: scale(0.6); }
+  50% { opacity: 0.85; transform: scale(1); }
+  70% { opacity: 0.7; transform: scale(1.05); }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+@keyframes ci-sheen { to { background-position: 0 0; } }
+@keyframes ci-reel {
+  from { transform: rotate(-120deg); }
+  to { transform: rotate(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ci-overlay { display: none; }
+}
+:root[data-motion="reduce"] .ci-overlay { display: none; }
+
+/* CineoraLoader: eased reel turn + soft glow pulse; static for reduced motion. */
+.cl-reel {
+  animation: cl-spin 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  filter: drop-shadow(0 0 0.5rem color-mix(in srgb, var(--accent) 50%, transparent));
+}
+@keyframes cl-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cl-reel { animation: none; } }
+:root[data-motion="reduce"] .cl-reel { animation: none; }
+
+/* Expanded title card (portal): grows out of the poster it opened from. */
+@keyframes hovercard-in {
+  from { opacity: 0; transform: scale(0.88); }
+  to { opacity: 1; transform: scale(1); }
+}
+.hovercard-in {
+  animation: hovercard-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Watch-party reactions drift up and fade. */
+@keyframes party-float {
+  0% { opacity: 0; transform: translateY(10px) scale(0.8); }
+  15% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-180px) scale(1.15); }
+}
+.party-float {
+  animation: party-float 3.6s ease-out forwards;
+}
+
+/* Subtitle size follows the profile setting (data-cue on the <video>). */
+video[data-cue="small"]::cue { font-size: 80%; }
+video[data-cue="large"]::cue { font-size: 135%; }
+video[data-cue="xlarge"]::cue { font-size: 180%; }

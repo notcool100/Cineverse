@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getMyHome } from "@/lib/client-api";
+import { getMyHome, removeFromHistory } from "@/lib/client-api";
 import { favouriteGenres } from "@/lib/onboarding";
 import { toTitle } from "@/lib/title-map";
 import type { Title } from "@/lib/types";
@@ -42,7 +42,13 @@ export function PersonalRows() {
     };
   }, [user]);
 
+  const remove = (t: Title) => {
+    const before = loaded;
+    setLoaded((l) => l && { ...l, rows: l.rows.map((r) => (r.key === "continue" ? { ...r, items: r.items.filter((x) => x.id !== t.id) } : r)).filter((r) => r.items.length > 0) });
+    removeFromHistory(t.id).catch(() => setLoaded(before));
+  };
+
   if (!user) return null;
   if (loaded?.userId !== user.id) return <RowSkeleton count={7} />;
-  return loaded.rows.map((r) => <TitleRow key={r.key} heading={r.title} titles={r.items} />);
+  return loaded.rows.map((r) => <TitleRow key={r.key} heading={r.title} titles={r.items} onRemove={r.key === "continue" ? remove : undefined} />);
 }
